@@ -17,6 +17,12 @@ dependencies = [
   "requests>=2.31",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pyarrow>=15.0",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
