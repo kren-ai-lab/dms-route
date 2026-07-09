@@ -93,7 +93,7 @@ It is a **clean data + representation layer**.
 ### From source
 
 ```bash
-git clone https://github.com/your-org/parsing_dms_data.git
+git clone https://github.com/kren-ai-lab/parsing_dms_data.git
 cd parsing_dms_data
 pip install -e .
 ```
