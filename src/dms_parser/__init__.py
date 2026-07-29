@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
+from dms_parser.cache import CacheManifest, FilesystemCache
 from dms_parser.exceptions import (
+    CacheError,
+    CorruptCacheManifestError,
     DMSParserError,
     DownloadError,
     FileFormatError,
+    InvalidCacheEntryError,
     InvalidDatasetError,
     InvalidHGVSVariantError,
     InvalidVariantError,
@@ -66,6 +70,8 @@ from dms_parser.validation import (
 __all__ = [
     "build_mavedb_dataset",
     "build_proteingym_dataset",
+    "FilesystemCache",
+    "CacheManifest",
     "parse_variant",
     "parse_variant_token",
     "parse_variant_series",
@@ -106,6 +112,9 @@ __all__ = [
     "has_wildtype_row",
     "count_invalid_sequences",
     "DMSParserError",
+    "CacheError",
+    "InvalidCacheEntryError",
+    "CorruptCacheManifestError",
     "InvalidDatasetError",
     "MissingWildTypeError",
     "InvalidVariantError",

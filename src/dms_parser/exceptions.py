@@ -41,3 +41,15 @@ class DownloadError(DMSParserError):
 
 class FileFormatError(DMSParserError):
     """Raised when an input file format is unsupported or malformed."""
+
+
+class CacheError(DMSParserError):
+    """Base exception for filesystem cache failures."""
+
+
+class InvalidCacheEntryError(CacheError):
+    """Raised when a cached artifact is missing, invalid, or corrupted."""
+
+
+class CorruptCacheManifestError(InvalidCacheEntryError):
+    """Raised when a cache manifest is malformed or inconsistent."""
