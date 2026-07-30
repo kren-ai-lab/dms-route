@@ -116,25 +116,38 @@ def extract_wt_from_metadata(metadata: dict) -> str | None:
 # --------------------------------------------------------------------------- #
 
 def process_proteingym(cfg: dict, dry_run: bool = False) -> list[dict]:
+    """Process configured ProteinGym datasets or return metadata-only summaries."""
     dir_base = Path(cfg["dir_base"])
     data_dir = dir_base / "raw"
     output_dir = dir_base / "proccesed"
-    ensure_dirs(data_dir, output_dir)
 
     metadata_path = dir_base / "DMS_substitutions.csv"
     benchmark_path = dir_base / "DMS_substitutions.parquet"
 
-    logger.info("[proteingym] Downloading/verifying reference files...")
+    if not dry_run:
+        ensure_dirs(data_dir, output_dir)
+
+    logger.info("[proteingym] Downloading/verifying metadata...")
     download_file(cfg["metadata_url"], metadata_path, overwrite=False)
-    download_file(cfg["benchmark_url"], benchmark_path, overwrite=False)
+
+    if not dry_run:
+        logger.info("[proteingym] Downloading/verifying benchmark data...")
+        download_file(cfg["benchmark_url"], benchmark_path, overwrite=False)
 
     df_meta = read_table(metadata_path)
-    df_all = read_table(benchmark_path)
-    logger.info(
-        "[proteingym] Metadata: %d available experiments. Base table: %d mutations.",
-        df_meta.shape[0],
-        df_all.shape[0],
-    )
+    df_all: pd.DataFrame | None = None
+    if not dry_run:
+        df_all = read_table(benchmark_path)
+        logger.info(
+            "[proteingym] Metadata: %d available experiments. Base table: %d mutations.",
+            df_meta.shape[0],
+            df_all.shape[0],
+        )
+    else:
+        logger.info(
+            "[proteingym] Metadata: %d available experiments.",
+            df_meta.shape[0],
+        )
 
     default_build_kwargs = cfg.get("default_build_kwargs", {})
     entries = cfg.get("datasets", [])
@@ -163,29 +176,33 @@ def process_proteingym(cfg: dict, dry_run: bool = False) -> list[dict]:
             wt_sequence = selected_row["target_seq"]
             uniprot_id = selected_row["UniProt_ID"] if "UniProt_ID" in selected_row else "Unknown"
 
-            df_experiment = df_all[df_all["DMS_id"] == dms_id].copy()
-            initial_rows = len(df_experiment)
-
-            temp_raw_path = data_dir / filename
-
-            build_kwargs = deep_merge(default_build_kwargs, entry.get("build_kwargs", {}))
-            build_kwargs.setdefault("score_col", "DMS_score")
-            build_kwargs.setdefault("variant_col", "mutant")
-
             row.update(
                 {
                     "dataset_id": dms_id,
                     "target_protein": uniprot_id,
                     "wt_length": len(wt_sequence),
-                    "raw_rows": initial_rows,
+                    "raw_rows": None,
                 }
             )
 
             if dry_run:
                 row["status"] = "DRY_RUN"
                 summary.append(row)
-                logger.info("[proteingym] (dry-run) %s -> %d raw rows", dms_id, initial_rows)
+                logger.info("[proteingym] (dry-run) metadata resolved for %s", dms_id)
                 continue
+
+            if df_all is None:
+                raise RuntimeError("ProteinGym benchmark data was not loaded.")
+
+            df_experiment = df_all[df_all["DMS_id"] == dms_id].copy()
+            initial_rows = len(df_experiment)
+            row["raw_rows"] = initial_rows
+
+            temp_raw_path = data_dir / filename
+
+            build_kwargs = deep_merge(default_build_kwargs, entry.get("build_kwargs", {}))
+            build_kwargs.setdefault("score_col", "DMS_score")
+            build_kwargs.setdefault("variant_col", "mutant")
 
             write_table(df_experiment, temp_raw_path, index=False)
 
@@ -225,10 +242,12 @@ def process_proteingym(cfg: dict, dry_run: bool = False) -> list[dict]:
 # --------------------------------------------------------------------------- #
 
 def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
+    """Process configured MaveDB datasets or return metadata-only summaries."""
     dir_base = Path(cfg["dir_base"])
     data_dir = dir_base / "raw"
     output_dir = dir_base / "proccesed"
-    ensure_dirs(data_dir, output_dir)
+    if not dry_run:
+        ensure_dirs(data_dir, output_dir)
 
     base_url = cfg["base_url"]
     default_build_kwargs = cfg.get("default_build_kwargs", {})
@@ -263,6 +282,21 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
             if wt_sequence is None:
                 raise ValueError("No WT found in metadata.")
 
+            row.update(
+                {
+                    "dataset_id": urn,
+                    "target_protein": target_name,
+                    "wt_length": len(wt_sequence),
+                    "raw_rows": None,
+                }
+            )
+
+            if dry_run:
+                row["status"] = "DRY_RUN"
+                summary.append(row)
+                logger.info("[mavedb] (dry-run) metadata resolved for %s", urn)
+                continue
+
             scores_response = requests.get(f"{base_url}/score-sets/{urn}/scores", timeout=60)
             scores_path = data_dir / f"{urn.replace(':', '_')}_scores.csv"
             scores_path.write_text(scores_response.text, encoding="utf-8")
@@ -279,20 +313,7 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
             if not hgvs_col or not score_col:
                 raise ValueError("No Score nor HGVS columns detected.")
 
-            row.update(
-                {
-                    "dataset_id": urn,
-                    "target_protein": target_name,
-                    "wt_length": len(wt_sequence),
-                    "raw_rows": initial_rows,
-                }
-            )
-
-            if dry_run:
-                row["status"] = "DRY_RUN"
-                summary.append(row)
-                logger.info("[mavedb] (dry-run) %s -> %d raw rows", urn, initial_rows)
-                continue
+            row["raw_rows"] = initial_rows
 
             build_kwargs = deep_merge(default_build_kwargs, entry.get("build_kwargs", {}))
 
