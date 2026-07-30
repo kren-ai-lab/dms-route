@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
 from dms_parser.cache import CacheManifest, FilesystemCache
+from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
 from dms_parser.exceptions import (
     CacheError,
+    CatalogError,
     CorruptCacheManifestError,
     DMSParserError,
+    DatasetNotFoundError,
     DownloadError,
     FileFormatError,
     InvalidCacheEntryError,
+    InvalidCatalogQueryError,
     InvalidDatasetError,
     InvalidHGVSVariantError,
     InvalidVariantError,
@@ -52,6 +56,8 @@ from dms_parser.transforms import (
     add_zscore,
     compute_wt_score,
 )
+from dms_parser.sources.mavedb_catalog import MaveDBCatalog
+from dms_parser.sources.proteingym_catalog import ProteinGymCatalog
 from dms_parser.validation import (
     count_invalid_sequences,
     has_wildtype_row,
@@ -71,6 +77,11 @@ from dms_parser.validation import (
 __all__ = [
     "build_mavedb_dataset",
     "build_proteingym_dataset",
+    "DatasetRecord",
+    "MaveDBCatalog",
+    "ProteinGymCatalog",
+    "list_datasets",
+    "get_dataset_metadata",
     "FilesystemCache",
     "CacheManifest",
     "fetch_to_cache",
@@ -115,8 +126,11 @@ __all__ = [
     "count_invalid_sequences",
     "DMSParserError",
     "CacheError",
+    "CatalogError",
     "InvalidCacheEntryError",
     "CorruptCacheManifestError",
+    "InvalidCatalogQueryError",
+    "DatasetNotFoundError",
     "InvalidDatasetError",
     "MissingWildTypeError",
     "InvalidVariantError",

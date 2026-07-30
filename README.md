@@ -190,6 +190,52 @@ Pass `refresh=True` to retrieve and safely publish a new copy.
 
 ---
 
+### Dataset catalog
+
+Catalog operations return a common `DatasetRecord` dataclass with `source`,
+`dataset_id`, optional `title`, `target_id`, `variant_type`, and `n_variants`
+fields, plus the complete source object or CSV row in `raw_metadata`.
+
+List public MaveDB score sets:
+
+```python
+from dms_parser import list_datasets
+
+records = list_datasets("mavedb", query="BRCA1", limit=10)
+```
+
+List ProteinGym substitution assays using the lightweight reference-file cache:
+
+```python
+from dms_parser import FilesystemCache, list_datasets
+
+cache = FilesystemCache("datasets/cache")
+records = list_datasets(
+    "proteingym",
+    variant_type="substitutions",
+    cache=cache,
+    limit=10,
+)
+```
+
+Retrieve one metadata record by source identifier:
+
+```python
+from dms_parser import get_dataset_metadata
+
+record = get_dataset_metadata(
+    "mavedb",
+    "urn:mavedb:00000001-a-1",
+)
+```
+
+Catalog operations retrieve metadata only. They never download score tables,
+benchmark archives, raw assays, alignments, or model predictions. Listing
+`source="all"` is intentionally unsupported because cross-source pagination
+would be ambiguous; call each source separately.
+
+---
+
 ## 🧬 Standardized Dataset Schema
 
 All datasets are transformed into a common structure:
@@ -254,6 +300,7 @@ The library is organized into modular components:
 dms_parser/
 ├── builders.py        # High-level dataset construction
 ├── cache.py           # Validated filesystem artifact cache
+├── catalog.py         # Common metadata records and source dispatch
 ├── fetch.py           # Cache-aware staged downloads
 ├── parsing.py         # Variant parsing logic
 ├── transforms.py      # Score transformations
@@ -264,7 +311,9 @@ dms_parser/
 ├── types.py           # Type definitions
 └── sources/
     ├── mavedb.py
-    └── proteingym.py
+    ├── mavedb_catalog.py
+    ├── proteingym.py
+    └── proteingym_catalog.py
 ```
 
 ---
