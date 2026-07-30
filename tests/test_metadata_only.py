@@ -51,7 +51,7 @@ def _forbid_skipped_operations(monkeypatch, runner) -> None:
 def _assert_no_data_artifacts(root: Path) -> None:
     """Assert that metadata-only execution created no dataset artifacts."""
     assert not (root / "raw").exists()
-    assert not (root / "proccesed").exists()
+    assert not (root / "processed").exists()
     assert not (root / "cache").exists()
     assert list(root.rglob(".download-*")) == []
     assert list(root.rglob("artifact-*")) == []
@@ -198,6 +198,9 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
     class ScoresResponse:
         text = "hgvs_pro,score\np.Met1Ala,0.5\n"
 
+        def raise_for_status(self) -> None:
+            """Represent a successful scores response."""
+
     def source_request(url: str, *, timeout: int):
         assert timeout == 60
         requested_urls.append(url)
@@ -235,7 +238,66 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
     assert "add_binary_label" not in builder_calls[0]
     assert result[0]["status"] == "OK"
     assert (source_root / "raw").exists()
-    assert (source_root / "proccesed").exists()
+    assert (source_root / "processed").exists()
+
+
+def test_normal_mavedb_rejects_failed_scores_response(
+    tmp_path,
+    monkeypatch,
+    runner,
+):
+    source_root = tmp_path / "mavedb"
+    base_url = "https://api.example.test"
+    urn = "urn:mavedb:00000001-a-1"
+    requested_urls: list[str] = []
+    builder_called = False
+
+    class FailedScoresResponse:
+        text = "this content must not be written"
+
+        def raise_for_status(self) -> None:
+            """Raise the HTTP failure returned by the score endpoint."""
+            raise runner.requests.HTTPError("503 Server Error")
+
+    def source_request(url: str, *, timeout: int):
+        assert timeout == 60
+        requested_urls.append(url)
+        if url.endswith("/scores"):
+            return FailedScoresResponse()
+        return MetadataResponse(
+            {
+                "targetGenes": [{"name": "GENE1"}],
+                "targetSequence": {"sequence": "MKT"},
+            }
+        )
+
+    def unexpected_builder(**kwargs):
+        nonlocal builder_called
+        builder_called = True
+        raise AssertionError("A failed score response must not reach the builder.")
+
+    monkeypatch.setattr(runner.requests, "get", source_request)
+    monkeypatch.setattr(runner, "build_mavedb_dataset", unexpected_builder)
+
+    result = runner.process_mavedb(
+        {
+            "dir_base": source_root,
+            "base_url": base_url,
+            "datasets": [{"urn": urn}],
+        },
+        dry_run=False,
+    )
+
+    assert requested_urls == [
+        f"{base_url}/score-sets/{urn}",
+        f"{base_url}/score-sets/{urn}/scores",
+    ]
+    assert result[0]["status"] == "ERROR"
+    assert "503 Server Error" in result[0]["error"]
+    assert builder_called is False
+    assert not (
+        source_root / "raw" / "urn_mavedb_00000001-a-1_scores.csv"
+    ).exists()
 
 
 def test_normal_proteingym_execution_keeps_existing_acquisition_path(
@@ -300,4 +362,4 @@ def test_normal_proteingym_execution_keeps_existing_acquisition_path(
     assert "add_binary_label" not in builder_calls[0]
     assert result[0]["status"] == "OK"
     assert (source_root / "raw").exists()
-    assert (source_root / "proccesed").exists()
+    assert (source_root / "processed").exists()

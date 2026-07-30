@@ -1,8 +1,4 @@
 pandas
-pyyaml
+PyYAML
+pyarrow
 requests
-
-#dms_parser
-git clone https://github.com/kren-ai-lab/parsing_dms_data.git
-cd parsing_dms_data
-pip install -e .

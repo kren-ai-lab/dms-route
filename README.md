@@ -90,7 +90,7 @@ It is a **clean data + representation layer**.
 
 ## 📦 Installation
 
-### From source
+### Library installation
 
 ```bash
 git clone https://github.com/kren-ai-lab/parsing_dms_data.git
@@ -98,10 +98,22 @@ cd parsing_dms_data
 pip install -e .
 ```
 
-### Minimal dependencies
+### Test installation
 
 ```bash
-pip install pandas numpy requests pyarrow
+pip install -e ".[dev]"
+python -m pytest
+```
+
+### YAML example runner
+
+The YAML runner additionally requires PyYAML and parquet support:
+
+```bash
+pip install -e .
+pip install -r examples/yml_parser/requirements.txt
+python examples/yml_parser/run_dms_parser.py \
+    --config examples/yml_parser/config.yml
 ```
 
 ---
@@ -112,7 +124,8 @@ pip install pandas numpy requests pyarrow
 * pandas
 * numpy
 * requests
-* pyarrow (for parquet support)
+* pyarrow (for parquet support in tests and the YAML example runner)
+* PyYAML (for the YAML example runner)
 
 ---
 
@@ -154,6 +167,29 @@ df.head()
 
 ---
 
+### Cached downloads
+
+`FilesystemCache` stores artifacts by source and dataset identifier with a
+manifest containing the original URL, download time, file size, and SHA-256
+checksum. `fetch_to_cache` returns valid cache hits without a network request
+and uses atomic downloading and publication for misses or refreshes.
+
+```python
+from dms_parser import FilesystemCache, fetch_to_cache
+
+cache = FilesystemCache("datasets/cache")
+path = fetch_to_cache(
+    "https://example.org/experiment.csv",
+    source="proteingym",
+    dataset_id="experiment-1",
+    cache=cache,
+)
+```
+
+Pass `refresh=True` to retrieve and safely publish a new copy.
+
+---
+
 ## 🧬 Standardized Dataset Schema
 
 All datasets are transformed into a common structure:
@@ -178,6 +214,11 @@ Optional:
 ---
 
 ## 🔬 Transformations
+
+Numerical score transformations are opt-in. When transformation arguments are
+omitted, both dataset builders preserve source values in `score_raw`. Request
+WT-relative scores, pseudo-binary labels, z-scores, or min-max scaling
+explicitly when they are needed.
 
 ### WT-relative scoring
 
@@ -212,6 +253,8 @@ The library is organized into modular components:
 ```text
 dms_parser/
 ├── builders.py        # High-level dataset construction
+├── cache.py           # Validated filesystem artifact cache
+├── fetch.py           # Cache-aware staged downloads
 ├── parsing.py         # Variant parsing logic
 ├── transforms.py      # Score transformations
 ├── validation.py      # Dataset and sequence validation
@@ -252,13 +295,14 @@ dms_parser/
 
 ## 📓 Examples
 
-See the `notebooks/` directory:
+See the `examples/` directory:
 
 ```text
-01_quickstart_proteingym_download.ipynb
-02_quickstart_mavedb_download.ipynb
-03_variant_parsing_and_reconstruction.ipynb
-04_transforms_and_pseudo_labels.ipynb
+examples/01_quickstart_proteingym.ipynb
+examples/02_quickstart_mavedb_download.ipynb
+examples/03_variant_parsing_and_reconstruction.ipynb
+examples/04_transforms_and_pseudo_labels.ipynb
+examples/yml_parser/run_dms_parser.py
 ```
 
 ---
@@ -268,7 +312,7 @@ See the `notebooks/` directory:
 Run the full test suite:
 
 ```bash
-pytest tests/ -q
+python -m pytest
 ```
 
 ---

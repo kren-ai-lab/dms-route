@@ -1,12 +1,15 @@
 # DMS Pipeline (ProteinGym + MaveDB)
 
-config-driven script built on top of `dms_parser` for MaveDB and ProteinGym datasets.
+A configuration-driven script built on `dms_parser` for MaveDB and ProteinGym
+datasets.
 
 ## Usage
 
 ```bash
-pip install -r requirements.txt   # plus dms_parser itself
-python run_dms_parser.py --config config.yml
+pip install -e .
+pip install -r examples/yml_parser/requirements.txt
+python examples/yml_parser/run_dms_parser.py \
+    --config examples/yml_parser/config.yml
 ```
 
 Options:
@@ -27,7 +30,7 @@ or MaveDB's `hgvs_col`/`score_col`) for just that dataset.
 
 ## Output
 
-- Processed CSVs land in `<dir_base>/proccesed/`, one per dataset, same as
+- Processed CSVs land in `<dir_base>/processed/`, one per dataset, same as
   the notebooks.
 - A combined run summary (CSV + JSON) is written to `datasets/summaries/`,
   covering both sources, with per-dataset status (`OK` / `ERROR` /

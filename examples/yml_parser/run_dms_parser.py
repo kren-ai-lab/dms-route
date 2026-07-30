@@ -3,8 +3,8 @@
 run_dms_parser.py
 ====================
 
-Console runner for downloading ProteinGym and MaveDB through parsing_dms_data repository
-config-driven pipeline built on top of `dms_parser`.
+Configuration-driven console runner for processing ProteinGym and MaveDB
+datasets with `dms_parser`.
 
 Usage
 -----
@@ -119,7 +119,7 @@ def process_proteingym(cfg: dict, dry_run: bool = False) -> list[dict]:
     """Process configured ProteinGym datasets or return metadata-only summaries."""
     dir_base = Path(cfg["dir_base"])
     data_dir = dir_base / "raw"
-    output_dir = dir_base / "proccesed"
+    output_dir = dir_base / "processed"
 
     metadata_path = dir_base / "DMS_substitutions.csv"
     benchmark_path = dir_base / "DMS_substitutions.parquet"
@@ -245,7 +245,7 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
     """Process configured MaveDB datasets or return metadata-only summaries."""
     dir_base = Path(cfg["dir_base"])
     data_dir = dir_base / "raw"
-    output_dir = dir_base / "proccesed"
+    output_dir = dir_base / "processed"
     if not dry_run:
         ensure_dirs(data_dir, output_dir)
 
@@ -274,7 +274,7 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
 
             target_name = "Unknown"
             if "targetGenes" in metadata and isinstance(metadata["targetGenes"], list) and metadata["targetGenes"]:
-                target_name = metadata["targetGenes"][0].get("name", "Desconocido")
+                target_name = metadata["targetGenes"][0].get("name", "Unknown")
             elif "title" in metadata:
                 target_name = metadata["title"].split(" ")[0]
 
@@ -298,6 +298,7 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
                 continue
 
             scores_response = requests.get(f"{base_url}/score-sets/{urn}/scores", timeout=60)
+            scores_response.raise_for_status()
             scores_path = data_dir / f"{urn.replace(':', '_')}_scores.csv"
             scores_path.write_text(scores_response.text, encoding="utf-8")
 
@@ -311,7 +312,7 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
                 (c for c in ["score", "DMS_score", "fitness"] if c in df_raw.columns), None
             )
             if not hgvs_col or not score_col:
-                raise ValueError("No Score nor HGVS columns detected.")
+                raise ValueError("Neither score nor HGVS columns were detected.")
 
             row["raw_rows"] = initial_rows
 
@@ -411,7 +412,7 @@ def print_report(summary: list[dict]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Processes ProteinGym and/o MaveDB DMS datasets using dms_parser."
+        description="Processes ProteinGym and/or MaveDB DMS datasets using dms_parser."
     )
     parser.add_argument(
         "--config", "-c", required=True, type=Path, help="Configuration YAML file's location."
@@ -425,7 +426,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Solve metdata and WT sequences but don't download scores nor write processed output.",
+        help=(
+            "Resolve metadata and WT sequences without downloading scores "
+            "or writing processed output."
+        ),
     )
     parser.add_argument(
         "--log-level",
