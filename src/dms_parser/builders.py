@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,8 @@ from dms_parser.validation import (
     validate_wt_sequence,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _resolve_wt_sequence(
     wt_sequence: str | None = None,
@@ -42,6 +45,12 @@ def _resolve_wt_sequence(
     if wt_sequence is None and wt_fasta_path is None:
         raise ValueError("Either wt_sequence or wt_fasta_path must be provided.")
 
+    strategy = "provided_sequence" if wt_sequence is not None else "fasta_file"
+    logger.debug(
+        "Resolving WT sequence strategy=%s dna_input=%s",
+        strategy,
+        wt_sequence_is_dna,
+    )
     if wt_sequence is None:
         _, wt_sequence = read_fasta_one(str(wt_fasta_path))
 
@@ -55,6 +64,12 @@ def _resolve_wt_sequence(
         )
 
     validate_wt_sequence(wt_sequence)
+    logger.debug(
+        "Resolved WT sequence strategy=%s translated_from_dna=%s length=%d",
+        strategy,
+        wt_sequence_is_dna,
+        len(wt_sequence),
+    )
     return wt_sequence
 
 
@@ -195,10 +210,35 @@ def build_mavedb_dataset(
     require_wt_for_transforms: bool = False,
 ) -> pd.DataFrame:
     """Build a standardized MaveDB-like dataset with opt-in score transforms."""
+    logger.info(
+        "Starting dataset build source=mavedb dataset_id=%s",
+        dataset_id,
+    )
+    logger.debug(
+        "Builder options source=mavedb dataset_id=%s score_col=%s "
+        "variant_col=%s add_relative_score=%s add_binary_label=%s "
+        "drop_failed=%s validate_output=%s",
+        dataset_id,
+        score_col,
+        hgvs_col,
+        add_relative_score,
+        add_binary_label,
+        drop_failed,
+        validate_output,
+    )
     df = read_table(input_path, sep=sep)
+    input_rows = len(df)
 
     validate_required_columns(df, [hgvs_col, score_col])
     validate_score_column(df, score_col, allow_na=True)
+    logger.debug(
+        "Detected dataset columns source=mavedb dataset_id=%s "
+        "variant_col=%s score_col=%s input_rows=%d",
+        dataset_id,
+        hgvs_col,
+        score_col,
+        input_rows,
+    )
 
     wt_seq = _resolve_wt_sequence(
         wt_sequence=wt_sequence,
@@ -227,6 +267,9 @@ def build_mavedb_dataset(
     out["n_mutations"] = parsed_df["n_mutations"]
 
     out["score_raw"] = pd.to_numeric(out[score_col], errors="coerce")
+    validated_rows = int((parsed_df["status"] == "OK").sum())
+    unsupported_rows = int((parsed_df["status"] == "Unsupported").sum())
+    error_rows = int((parsed_df["status"] == "Error").sum())
 
     if drop_failed:
         out = out[out["status"] == "OK"].copy()
@@ -245,9 +288,22 @@ def build_mavedb_dataset(
                 higher_is_better=higher_is_better,
                 binary_output_col=binary_output_col,
             )
+            logger.info(
+                "Applied score transformations source=mavedb dataset_id=%s "
+                "relative_method=%s binary_label=%s",
+                dataset_id,
+                relative_method,
+                add_binary_label,
+            )
         elif require_wt_for_transforms:
             raise ValueError(
                 "WT-relative transforms were requested, but no valid WT row was found."
+            )
+        else:
+            logger.warning(
+                "Skipped requested WT-relative transformation source=mavedb "
+                "dataset_id=%s reason=no_valid_wild_type_row",
+                dataset_id,
             )
     elif add_binary_label:
         raise ValueError(
@@ -272,6 +328,16 @@ def build_mavedb_dataset(
             status_col="status",
         )
 
+    logger.info(
+        "Completed dataset build source=mavedb dataset_id=%s input_rows=%d "
+        "output_rows=%d validated_rows=%d unsupported_rows=%d error_rows=%d",
+        dataset_id,
+        input_rows,
+        len(out),
+        validated_rows,
+        unsupported_rows,
+        error_rows,
+    )
     return out
 
 
@@ -302,11 +368,37 @@ def build_proteingym_dataset(
     require_wt_for_transforms: bool = False,
 ) -> pd.DataFrame:
     """Build a standardized ProteinGym-like dataset with opt-in score transforms."""
+    logger.info(
+        "Starting dataset build source=proteingym dataset_id=%s",
+        dataset_id,
+    )
+    logger.debug(
+        "Builder options source=proteingym dataset_id=%s score_col=%s "
+        "variant_col=%s add_relative_score=%s add_binary_label=%s "
+        "drop_failed=%s validate_output=%s strict_variant_parsing=%s",
+        dataset_id,
+        score_col,
+        variant_col,
+        add_relative_score,
+        add_binary_label,
+        drop_failed,
+        validate_output,
+        strict_variant_parsing,
+    )
     df = read_table(input_path, sep=sep)
+    input_rows = len(df)
 
     validate_required_columns(df, [variant_col, score_col])
     validate_variant_column(df, variant_col)
     validate_score_column(df, score_col, allow_na=True)
+    logger.debug(
+        "Detected dataset columns source=proteingym dataset_id=%s "
+        "variant_col=%s score_col=%s input_rows=%d",
+        dataset_id,
+        variant_col,
+        score_col,
+        input_rows,
+    )
 
     wt_seq = _resolve_wt_sequence(
         wt_sequence=wt_sequence,
@@ -348,6 +440,9 @@ def build_proteingym_dataset(
 
     out["score_raw"] = pd.to_numeric(out[score_col], errors="coerce")
     out = pd.concat([out, variant_info], axis=1)
+    validated_rows = int((parsed_df["status"] == "OK").sum())
+    unsupported_rows = int((parsed_df["status"] == "Unsupported").sum())
+    error_rows = int((parsed_df["status"] == "Error").sum())
 
     if drop_failed:
         out = out[out["status"] == "OK"].copy()
@@ -366,9 +461,22 @@ def build_proteingym_dataset(
                 higher_is_better=higher_is_better,
                 binary_output_col=binary_output_col,
             )
+            logger.info(
+                "Applied score transformations source=proteingym dataset_id=%s "
+                "relative_method=%s binary_label=%s",
+                dataset_id,
+                relative_method,
+                add_binary_label,
+            )
         elif require_wt_for_transforms:
             raise ValueError(
                 "WT-relative transforms were requested, but no valid WT row was found."
+            )
+        else:
+            logger.warning(
+                "Skipped requested WT-relative transformation source=proteingym "
+                "dataset_id=%s reason=no_valid_wild_type_row",
+                dataset_id,
             )
     elif add_binary_label:
         raise ValueError(
@@ -393,4 +501,14 @@ def build_proteingym_dataset(
             status_col="status",
         )
 
+    logger.info(
+        "Completed dataset build source=proteingym dataset_id=%s input_rows=%d "
+        "output_rows=%d validated_rows=%d unsupported_rows=%d error_rows=%d",
+        dataset_id,
+        input_rows,
+        len(out),
+        validated_rows,
+        unsupported_rows,
+        error_rows,
+    )
     return out

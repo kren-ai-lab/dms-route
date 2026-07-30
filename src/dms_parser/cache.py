@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -14,6 +15,8 @@ from typing import BinaryIO
 from urllib.parse import unquote, urlparse
 
 from dms_parser.exceptions import CorruptCacheManifestError, InvalidCacheEntryError
+
+logger = logging.getLogger(__name__)
 
 _MANIFEST_FILENAME = "manifest.json"
 _SAFE_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
@@ -126,6 +129,7 @@ class FilesystemCache:
     def __init__(self, root: str | Path) -> None:
         """Initialize a cache rooted at ``root`` without creating it."""
         self.root = Path(root)
+        logger.debug("Initialized filesystem cache root=%s", self.root)
 
     def entry_path(self, source: str, dataset_id: str) -> Path:
         """Return the deterministic directory for a cache key."""
@@ -175,11 +179,30 @@ class FilesystemCache:
         bypass a cache hit before obtaining fresh data.
         """
         entry_path = self.entry_path(source, dataset_id)
+        logger.debug(
+            "Resolving cache entry source=%s dataset_id=%s path=%s "
+            "validate_checksum=%s",
+            source,
+            dataset_id,
+            entry_path,
+            validate_checksum,
+        )
         if refresh:
+            logger.debug(
+                "Skipping cache lookup for explicit refresh source=%s dataset_id=%s",
+                source,
+                dataset_id,
+            )
             return None
 
         manifest_path = entry_path / _MANIFEST_FILENAME
         if not manifest_path.exists():
+            logger.debug(
+                "Cache miss reason=manifest_missing source=%s dataset_id=%s path=%s",
+                source,
+                dataset_id,
+                manifest_path,
+            )
             return None
 
         manifest = self.load_manifest(source, dataset_id)
@@ -204,6 +227,15 @@ class FilesystemCache:
                     f"{source!r}/{dataset_id!r}."
                 )
 
+        logger.debug(
+            "Validated cache entry source=%s dataset_id=%s path=%s "
+            "size=%d checksum=%s",
+            source,
+            dataset_id,
+            artifact_path,
+            manifest.file_size,
+            manifest.sha256,
+        )
         return artifact_path
 
     def load_manifest(self, source: str, dataset_id: str) -> CacheManifest:
@@ -222,6 +254,12 @@ class FilesystemCache:
             raise CorruptCacheManifestError(
                 "Cache manifest key does not match its filesystem location."
             )
+        logger.debug(
+            "Validated cache manifest source=%s dataset_id=%s path=%s",
+            source,
+            dataset_id,
+            manifest_path,
+        )
         return manifest
 
     def store_file(
@@ -298,6 +336,12 @@ class FilesystemCache:
             if not refresh:
                 cached_path = self.resolve(source, dataset_id)
                 if cached_path is not None:
+                    logger.info(
+                        "Cache publication reused existing entry source=%s "
+                        "dataset_id=%s",
+                        source,
+                        dataset_id,
+                    )
                     return cached_path
 
             entry_path = self.entry_path(source, dataset_id)
@@ -351,6 +395,20 @@ class FilesystemCache:
             )
             self._write_manifest(entry_path / _MANIFEST_FILENAME, manifest)
             candidate_published = False
+            logger.info(
+                "Published cache artifact source=%s dataset_id=%s size=%d",
+                source,
+                dataset_id,
+                size,
+            )
+            logger.debug(
+                "Cache publication details source=%s dataset_id=%s path=%s "
+                "checksum=%s",
+                source,
+                dataset_id,
+                candidate_path,
+                manifest.sha256,
+            )
 
             if (
                 previous_artifact_path is not None
@@ -384,6 +442,11 @@ class FilesystemCache:
         try:
             manifest = self.load_manifest(source, dataset_id)
         except CorruptCacheManifestError:
+            logger.warning(
+                "Ignoring invalid previous cache manifest source=%s dataset_id=%s",
+                source,
+                dataset_id,
+            )
             return None
         return manifest_path.parent / manifest.artifact_filename
 

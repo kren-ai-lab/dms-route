@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -12,6 +13,8 @@ import pandas as pd
 
 from dms_parser.cache import FilesystemCache
 from dms_parser.exceptions import InvalidCatalogQueryError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from dms_parser.sources.mavedb_catalog import MaveDBCatalog
@@ -201,6 +204,11 @@ def _resolve_catalog(
             raise InvalidCatalogQueryError(
                 f"The injected catalog does not match source {source!r}."
             )
+        logger.debug(
+            "Selected injected catalog adapter source=%s adapter=%s",
+            source,
+            type(catalog).__name__,
+        )
         return catalog
 
     if source == "mavedb":
@@ -212,9 +220,21 @@ def _resolve_catalog(
             raise InvalidCatalogQueryError(
                 "refresh is only supported for the ProteinGym catalog."
             )
-        return MaveDBCatalog()
+        adapter = MaveDBCatalog()
+        logger.debug(
+            "Selected default catalog adapter source=%s adapter=%s",
+            source,
+            type(adapter).__name__,
+        )
+        return adapter
 
-    return ProteinGymCatalog(cache=cache, refresh=refresh)
+    adapter = ProteinGymCatalog(cache=cache, refresh=refresh)
+    logger.debug(
+        "Selected default catalog adapter source=%s adapter=%s",
+        source,
+        type(adapter).__name__,
+    )
+    return adapter
 
 
 def _normalize_metadata_value(value: Any) -> Any:

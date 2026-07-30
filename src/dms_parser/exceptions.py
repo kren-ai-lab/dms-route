@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class DMSParserError(Exception):
     """Base exception for the dms_parser package."""

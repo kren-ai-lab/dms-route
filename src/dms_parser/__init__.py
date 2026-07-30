@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
 from dms_parser.cache import CacheManifest, FilesystemCache
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
@@ -73,6 +75,9 @@ from dms_parser.validation import (
     validate_wt_presence,
     validate_wt_sequence,
 )
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 __all__ = [
     "build_mavedb_dataset",

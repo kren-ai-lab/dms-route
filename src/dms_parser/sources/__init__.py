@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from dms_parser.sources.mavedb import (
     download_mavedb_dataset,
     ensure_local_copy as ensure_local_mavedb_copy,
@@ -16,6 +18,8 @@ from dms_parser.sources.proteingym import (
     load_proteingym_from_url,
 )
 from dms_parser.sources.proteingym_catalog import ProteinGymCatalog
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "MaveDBCatalog",

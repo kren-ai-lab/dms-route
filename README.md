@@ -190,6 +190,28 @@ Pass `refresh=True` to retrieve and safely publish a new copy.
 
 ---
 
+### Logging
+
+Importing `dms_parser` does not configure application logging. Applications
+can enable library lifecycle messages with the standard library:
+
+```python
+import logging
+
+logging.basicConfig(level=logging.INFO)
+```
+
+To enable diagnostic output for only this package:
+
+```python
+logging.getLogger("dms_parser").setLevel(logging.DEBUG)
+```
+
+Logging configuration, handlers, and output destinations remain the
+responsibility of the consuming application or CLI.
+
+---
+
 ### Dataset catalog
 
 Catalog operations return a common `DatasetRecord` dataclass with `source`,

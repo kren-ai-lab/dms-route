@@ -50,7 +50,7 @@ from dms_parser import (
 )
 from dms_parser.io import download_file
 
-logger = logging.getLogger("dms_pipeline")
+logger = logging.getLogger("dms_parser.example_runner")
 
 
 # --------------------------------------------------------------------------- #
@@ -123,6 +123,14 @@ def process_proteingym(cfg: dict, dry_run: bool = False) -> list[dict]:
 
     metadata_path = dir_base / "DMS_substitutions.csv"
     benchmark_path = dir_base / "DMS_substitutions.parquet"
+    logger.debug(
+        "[proteingym] Resolved paths metadata=%s benchmark=%s output=%s "
+        "dry_run=%s",
+        metadata_path,
+        benchmark_path,
+        output_dir,
+        dry_run,
+    )
 
     if not dry_run:
         ensure_dirs(data_dir, output_dir)
@@ -175,6 +183,12 @@ def process_proteingym(cfg: dict, dry_run: bool = False) -> list[dict]:
             dms_id = selected_row["DMS_id"]
             wt_sequence = selected_row["target_seq"]
             uniprot_id = selected_row["UniProt_ID"] if "UniProt_ID" in selected_row else "Unknown"
+            logger.debug(
+                "[proteingym] Resolved WT source=reference_metadata "
+                "dataset_id=%s length=%d",
+                dms_id,
+                len(wt_sequence),
+            )
 
             row.update(
                 {
@@ -203,6 +217,13 @@ def process_proteingym(cfg: dict, dry_run: bool = False) -> list[dict]:
             build_kwargs = deep_merge(default_build_kwargs, entry.get("build_kwargs", {}))
             build_kwargs.setdefault("score_col", "DMS_score")
             build_kwargs.setdefault("variant_col", "mutant")
+            logger.debug(
+                "[proteingym] Detected columns dataset_id=%s variant_col=%s "
+                "score_col=%s",
+                dms_id,
+                build_kwargs["variant_col"],
+                build_kwargs["score_col"],
+            )
 
             write_table(df_experiment, temp_raw_path, index=False)
 
@@ -217,6 +238,11 @@ def process_proteingym(cfg: dict, dry_run: bool = False) -> list[dict]:
 
             output_file = output_dir / f"{dms_id}_processed.csv"
             df_ok.to_csv(output_file, index=False)
+            logger.debug(
+                "[proteingym] Resolved output dataset_id=%s path=%s",
+                dms_id,
+                output_file,
+            )
 
             row.update(
                 {
@@ -246,6 +272,12 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
     dir_base = Path(cfg["dir_base"])
     data_dir = dir_base / "raw"
     output_dir = dir_base / "processed"
+    logger.debug(
+        "[mavedb] Resolved paths raw=%s output=%s dry_run=%s",
+        data_dir,
+        output_dir,
+        dry_run,
+    )
     if not dry_run:
         ensure_dirs(data_dir, output_dir)
 
@@ -281,6 +313,12 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
             wt_sequence = extract_wt_from_metadata(metadata)
             if wt_sequence is None:
                 raise ValueError("No WT found in metadata.")
+            logger.debug(
+                "[mavedb] Resolved WT source=score_set_metadata "
+                "dataset_id=%s length=%d",
+                urn,
+                len(wt_sequence),
+            )
 
             row.update(
                 {
@@ -313,6 +351,13 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
             )
             if not hgvs_col or not score_col:
                 raise ValueError("Neither score nor HGVS columns were detected.")
+            logger.debug(
+                "[mavedb] Detected columns dataset_id=%s variant_col=%s "
+                "score_col=%s",
+                urn,
+                hgvs_col,
+                score_col,
+            )
 
             row["raw_rows"] = initial_rows
 
@@ -332,6 +377,11 @@ def process_mavedb(cfg: dict, dry_run: bool = False) -> list[dict]:
 
             output_file = output_dir / f"{urn.replace(':', '_')}_processed.csv"
             df_ok.to_csv(output_file, index=False)
+            logger.debug(
+                "[mavedb] Resolved output dataset_id=%s path=%s",
+                urn,
+                output_file,
+            )
 
             row.update(
                 {
@@ -441,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(
         level=getattr(logging, args.log_level),
-        format="%(asctime)s | %(levelname)-7s | %(message)s",
+        format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
         datefmt="%H:%M:%S",
     )
 

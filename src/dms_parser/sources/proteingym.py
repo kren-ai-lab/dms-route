@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,8 @@ from dms_parser.io import (
     infer_filename_from_url,
     read_table,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def download_proteingym_dataset(
@@ -34,6 +37,19 @@ def download_proteingym_dataset(
     artifact path is returned. ``output_dir`` and ``filename`` apply only to
     uncached downloads.
     """
+    logger.info(
+        "Starting source download source=proteingym dataset_id=%s "
+        "cache_enabled=%s",
+        dataset_id,
+        cache is not None,
+    )
+    logger.debug(
+        "Source download options source=proteingym dataset_id=%s overwrite=%s "
+        "refresh=%s",
+        dataset_id,
+        overwrite,
+        refresh,
+    )
     if cache is not None:
         if dataset_id is None:
             raise InvalidCacheEntryError(
@@ -43,13 +59,23 @@ def download_proteingym_dataset(
             raise InvalidCacheEntryError(
                 "overwrite cannot be used with a cache; use refresh=True."
             )
-        return fetch_to_cache(
+        path = fetch_to_cache(
             url,
             source="proteingym",
             dataset_id=dataset_id,
             cache=cache,
             refresh=refresh,
         )
+        logger.info(
+            "Completed source download source=proteingym dataset_id=%s",
+            dataset_id,
+        )
+        logger.debug(
+            "Resolved source artifact source=proteingym dataset_id=%s path=%s",
+            dataset_id,
+            path,
+        )
+        return path
 
     if refresh:
         raise InvalidCacheEntryError(
@@ -62,8 +88,17 @@ def download_proteingym_dataset(
         filename = infer_filename_from_url(url, default_name="proteingym_dataset.csv")
 
     output_path = output_dir / filename
-
-    return download_file(url, output_path, overwrite=overwrite)
+    logger.debug(
+        "Resolved source output source=proteingym dataset_id=%s path=%s",
+        dataset_id,
+        output_path,
+    )
+    path = download_file(url, output_path, overwrite=overwrite)
+    logger.info(
+        "Completed source download source=proteingym dataset_id=%s",
+        dataset_id,
+    )
+    return path
 
 
 def load_proteingym_dataset(
@@ -73,6 +108,7 @@ def load_proteingym_dataset(
     **kwargs,
 ) -> pd.DataFrame:
     """Load a ProteinGym dataset from disk."""
+    logger.debug("Loading source dataset source=proteingym path=%s", path)
     return read_table(path, sep=sep, **kwargs)
 
 
