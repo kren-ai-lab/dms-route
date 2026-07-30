@@ -183,7 +183,7 @@ def build_mavedb_dataset(
     dna_frame: int = 1,
     stop_at_stop: bool = True,
     sep: str | None = None,
-    add_relative_score: bool = True,
+    add_relative_score: bool = False,
     relative_method: str = "log_ratio",
     relative_output_col: str = "score_log_ratio",
     add_binary_label: bool = False,
@@ -194,7 +194,7 @@ def build_mavedb_dataset(
     validate_output: bool = True,
     require_wt_for_transforms: bool = False,
 ) -> pd.DataFrame:
-    """Build a standardized DMS dataset from a local MaveDB-like table."""
+    """Build a standardized MaveDB-like dataset with opt-in score transforms."""
     df = read_table(input_path, sep=sep)
 
     validate_required_columns(df, [hgvs_col, score_col])
@@ -290,7 +290,7 @@ def build_proteingym_dataset(
     stop_at_stop: bool = True,
     sep: str | None = None,
     strict_variant_parsing: bool = False,
-    add_relative_score: bool = True,
+    add_relative_score: bool = False,
     relative_method: str = "log_ratio",
     relative_output_col: str = "score_log_ratio",
     add_binary_label: bool = False,
@@ -301,7 +301,7 @@ def build_proteingym_dataset(
     validate_output: bool = True,
     require_wt_for_transforms: bool = False,
 ) -> pd.DataFrame:
-    """Build a standardized DMS dataset from a local ProteinGym-like table."""
+    """Build a standardized ProteinGym-like dataset with opt-in score transforms."""
     df = read_table(input_path, sep=sep)
 
     validate_required_columns(df, [variant_col, score_col])

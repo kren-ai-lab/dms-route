@@ -231,6 +231,8 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
         f"{base_url}/score-sets/{urn}/scores",
     ]
     assert len(builder_calls) == 1
+    assert "add_relative_score" not in builder_calls[0]
+    assert "add_binary_label" not in builder_calls[0]
     assert result[0]["status"] == "OK"
     assert (source_root / "raw").exists()
     assert (source_root / "proccesed").exists()
@@ -294,6 +296,8 @@ def test_normal_proteingym_execution_keeps_existing_acquisition_path(
 
     assert downloaded_urls == [metadata_url, benchmark_url]
     assert len(builder_calls) == 1
+    assert "add_relative_score" not in builder_calls[0]
+    assert "add_binary_label" not in builder_calls[0]
     assert result[0]["status"] == "OK"
     assert (source_root / "raw").exists()
     assert (source_root / "proccesed").exists()

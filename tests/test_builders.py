@@ -1,9 +1,93 @@
 from __future__ import annotations
 
+from inspect import signature
+
 import pandas as pd
 import pytest
 
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [build_mavedb_dataset, build_proteingym_dataset],
+)
+def test_builder_score_transform_defaults_are_disabled(builder):
+    parameters = signature(builder).parameters
+
+    assert parameters["add_relative_score"].default is False
+    assert parameters["add_binary_label"].default is False
+
+
+@pytest.mark.parametrize("transform_kwargs", [{}, {"add_relative_score": False}])
+def test_proteingym_scores_are_unchanged_without_transformations(
+    tmp_path,
+    wt_sequence: str,
+    transform_kwargs,
+):
+    scores = pd.Series([-1.0, 0.0, 2.0, None], name="DMS_score")
+    path = tmp_path / "proteingym_scores.csv"
+    pd.DataFrame(
+        {
+            "variant": ["WT", "M1A", "K2R", "T3Y"],
+            "DMS_score": scores,
+        }
+    ).to_csv(path, index=False)
+
+    result = build_proteingym_dataset(
+        input_path=path,
+        score_col="DMS_score",
+        variant_col="variant",
+        wt_sequence=wt_sequence,
+        **transform_kwargs,
+    )
+
+    pd.testing.assert_series_equal(
+        result["score_raw"].reset_index(drop=True),
+        scores,
+        check_names=False,
+    )
+    assert "score_log_ratio" not in result.columns
+    assert "score_binary_like" not in result.columns
+    assert (result["status"] == "OK").all()
+
+
+@pytest.mark.parametrize("transform_kwargs", [{}, {"add_relative_score": False}])
+def test_mavedb_scores_are_unchanged_without_transformations(
+    tmp_path,
+    wt_sequence: str,
+    transform_kwargs,
+):
+    scores = pd.Series([-1.0, 0.0, 2.0, None], name="score")
+    path = tmp_path / "mavedb_scores.csv"
+    pd.DataFrame(
+        {
+            "hgvs_pro": [
+                "p.Met1Ala",
+                "p.Lys2Arg",
+                "p.Thr3Tyr",
+                "p.Ala4Val",
+            ],
+            "score": scores,
+        }
+    ).to_csv(path, index=False)
+
+    result = build_mavedb_dataset(
+        input_path=path,
+        score_col="score",
+        hgvs_col="hgvs_pro",
+        wt_sequence=wt_sequence,
+        **transform_kwargs,
+    )
+
+    pd.testing.assert_series_equal(
+        result["score_raw"].reset_index(drop=True),
+        scores,
+        check_names=False,
+    )
+    assert "score_log_ratio" not in result.columns
+    assert "score_binary_like" not in result.columns
+    assert (result["status"] == "OK").all()
 
 
 def test_build_proteingym_dataset_basic(tmp_path, proteingym_like_df: pd.DataFrame, wt_sequence: str):
