@@ -7,6 +7,9 @@ from typing import Optional
 
 import pandas as pd
 
+from dms_parser.cache import FilesystemCache
+from dms_parser.exceptions import InvalidCacheEntryError
+from dms_parser.fetch import fetch_to_cache
 from dms_parser.io import (
     download_file,
     ensure_local_copy as ensure_local_dataset_copy,
@@ -21,8 +24,38 @@ def download_mavedb_dataset(
     filename: Optional[str] = None,
     *,
     overwrite: bool = False,
+    cache: FilesystemCache | None = None,
+    dataset_id: str | None = None,
+    refresh: bool = False,
 ) -> Path:
-    """Download a MaveDB dataset file from a direct URL."""
+    """Download a MaveDB dataset directly or through a filesystem cache.
+
+    When ``cache`` is provided, ``dataset_id`` is required and the cached
+    artifact path is returned. ``output_dir`` and ``filename`` apply only to
+    uncached downloads.
+    """
+    if cache is not None:
+        if dataset_id is None:
+            raise InvalidCacheEntryError(
+                "dataset_id is required when caching a MaveDB dataset."
+            )
+        if overwrite:
+            raise InvalidCacheEntryError(
+                "overwrite cannot be used with a cache; use refresh=True."
+            )
+        return fetch_to_cache(
+            url,
+            source="mavedb",
+            dataset_id=dataset_id,
+            cache=cache,
+            refresh=refresh,
+        )
+
+    if refresh:
+        raise InvalidCacheEntryError(
+            "refresh requires a cache; use overwrite=True for an uncached download."
+        )
+
     output_dir = Path(output_dir)
 
     if filename is None:
@@ -49,6 +82,9 @@ def load_mavedb_from_url(
     output_dir: str | Path = "./data/mavedb",
     filename: Optional[str] = None,
     overwrite: bool = False,
+    cache: FilesystemCache | None = None,
+    dataset_id: str | None = None,
+    refresh: bool = False,
     sep: str | None = None,
     **kwargs,
 ) -> pd.DataFrame:
@@ -58,6 +94,9 @@ def load_mavedb_from_url(
         output_dir=output_dir,
         filename=filename,
         overwrite=overwrite,
+        cache=cache,
+        dataset_id=dataset_id,
+        refresh=refresh,
     )
     return load_mavedb_dataset(path, sep=sep, **kwargs)
 
