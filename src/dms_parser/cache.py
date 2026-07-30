@@ -286,6 +286,10 @@ class FilesystemCache:
         downloaded_at: datetime | None,
     ) -> Path:
         """Store a binary stream after applying hit and refresh semantics."""
+        entry_path: Path | None = None
+        candidate_path: Path | None = None
+        candidate_published = False
+        previous_artifact_path: Path | None = None
         try:
             _validate_non_empty(original_url, "original_url")
             if downloaded_at is not None and downloaded_at.tzinfo is None:
@@ -297,9 +301,11 @@ class FilesystemCache:
                     return cached_path
 
             entry_path = self.entry_path(source, dataset_id)
+            previous_artifact_path = self._previous_artifact_path(
+                source,
+                dataset_id,
+            )
             entry_path.mkdir(parents=True, exist_ok=True)
-            artifact_filename = _artifact_filename(original_url)
-            artifact_path = entry_path / artifact_filename
 
             checksum = hashlib.sha256()
             size = 0
@@ -316,7 +322,17 @@ class FilesystemCache:
                         temporary_file.write(chunk)
                         checksum.update(chunk)
                         size += len(chunk)
-                os.replace(temporary_path, artifact_path)
+
+                artifact_filename = _artifact_filename(
+                    original_url,
+                    checksum.hexdigest(),
+                )
+                candidate_path = entry_path / artifact_filename
+                if candidate_path == previous_artifact_path:
+                    temporary_path.unlink()
+                else:
+                    os.replace(temporary_path, candidate_path)
+                    candidate_published = True
             finally:
                 if temporary_path is not None and temporary_path.exists():
                     temporary_path.unlink()
@@ -334,9 +350,42 @@ class FilesystemCache:
                 artifact_filename=artifact_filename,
             )
             self._write_manifest(entry_path / _MANIFEST_FILENAME, manifest)
-            return artifact_path
+            candidate_published = False
+
+            if (
+                previous_artifact_path is not None
+                and previous_artifact_path != candidate_path
+                and previous_artifact_path.is_file()
+            ):
+                previous_artifact_path.unlink()
+
+            return candidate_path
+        except Exception:
+            if (
+                candidate_published
+                and candidate_path is not None
+                and candidate_path.exists()
+            ):
+                candidate_path.unlink()
+            raise
         finally:
             stream.close()
+
+    def _previous_artifact_path(
+        self,
+        source: str,
+        dataset_id: str,
+    ) -> Path | None:
+        """Return the currently published artifact path when its manifest is valid."""
+        manifest_path = self.manifest_path(source, dataset_id)
+        if not manifest_path.exists():
+            return None
+
+        try:
+            manifest = self.load_manifest(source, dataset_id)
+        except CorruptCacheManifestError:
+            return None
+        return manifest_path.parent / manifest.artifact_filename
 
     @staticmethod
     def _write_manifest(path: Path, manifest: CacheManifest) -> None:
@@ -376,8 +425,8 @@ def _validate_non_empty(value: object, field: str) -> None:
         raise InvalidCacheEntryError(f"{field} must be a non-empty string.")
 
 
-def _artifact_filename(original_url: str) -> str:
-    """Build a safe artifact filename while retaining useful URL suffixes."""
+def _artifact_filename(original_url: str, checksum: str) -> str:
+    """Build a content-addressed filename while retaining useful URL suffixes."""
     parsed_name = Path(unquote(urlparse(original_url).path)).name
     suffixes = Path(parsed_name).suffixes
     safe_suffixes = [
@@ -386,7 +435,7 @@ def _artifact_filename(original_url: str) -> str:
         if re.fullmatch(r"\.[A-Za-z0-9]{1,10}", suffix)
     ]
     url_digest = hashlib.sha256(original_url.encode("utf-8")).hexdigest()[:16]
-    return f"artifact-{url_digest}{''.join(safe_suffixes)}"
+    return f"artifact-{url_digest}-{checksum[:16]}{''.join(safe_suffixes)}"
 
 
 def _sha256_file(path: Path) -> str:

@@ -233,3 +233,107 @@ def test_store_file_copies_content(tmp_path):
 
     assert stored_path != source_path
     assert stored_path.read_bytes() == source_path.read_bytes()
+
+
+def _fail_manifest_replace(monkeypatch):
+    original_replace = __import__("os").replace
+
+    def failing_replace(source, destination):
+        if destination.name == "manifest.json":
+            raise OSError("manifest publication failed")
+        original_replace(source, destination)
+
+    monkeypatch.setattr("dms_parser.cache.os.replace", failing_replace)
+
+
+def _assert_no_abandoned_cache_files(entry_path):
+    if not entry_path.exists():
+        return
+    assert list(entry_path.glob(".artifact-*")) == []
+    assert list(entry_path.glob(".manifest-*")) == []
+
+
+def test_failed_initial_manifest_publication_leaves_no_entry(
+    tmp_path,
+    monkeypatch,
+):
+    cache = FilesystemCache(tmp_path / "cache")
+    entry_path = cache.entry_path("example", "dataset-1")
+    _fail_manifest_replace(monkeypatch)
+
+    with pytest.raises(OSError, match="manifest publication failed"):
+        cache.store_bytes(
+            "example",
+            "dataset-1",
+            "https://example.test/data.csv",
+            b"content",
+        )
+
+    assert cache.resolve("example", "dataset-1") is None
+    assert list(entry_path.glob("artifact-*")) == []
+    _assert_no_abandoned_cache_files(entry_path)
+
+
+@pytest.mark.parametrize(
+    "refreshed_url",
+    [
+        "https://example.test/data.csv",
+        "https://example.test/replacement.tsv",
+    ],
+)
+def test_failed_cache_refresh_preserves_previous_entry(
+    tmp_path,
+    monkeypatch,
+    refreshed_url,
+):
+    cache = FilesystemCache(tmp_path / "cache")
+    original_path = cache.store_bytes(
+        "example",
+        "dataset-1",
+        "https://example.test/data.csv",
+        b"original",
+    )
+    original_manifest = cache.manifest_path(
+        "example",
+        "dataset-1",
+    ).read_bytes()
+    _fail_manifest_replace(monkeypatch)
+
+    with pytest.raises(OSError, match="manifest publication failed"):
+        cache.store_bytes(
+            "example",
+            "dataset-1",
+            refreshed_url,
+            b"replacement",
+            refresh=True,
+        )
+
+    assert cache.resolve("example", "dataset-1") == original_path
+    assert original_path.read_bytes() == b"original"
+    assert cache.manifest_path("example", "dataset-1").read_bytes() == original_manifest
+    assert list(original_path.parent.glob("artifact-*")) == [original_path]
+    _assert_no_abandoned_cache_files(original_path.parent)
+
+
+def test_successful_cache_refresh_removes_superseded_artifact(tmp_path):
+    cache = FilesystemCache(tmp_path / "cache")
+    original_path = cache.store_bytes(
+        "example",
+        "dataset-1",
+        "https://example.test/data.csv",
+        b"original",
+    )
+
+    refreshed_path = cache.store_bytes(
+        "example",
+        "dataset-1",
+        "https://example.test/replacement.tsv",
+        b"replacement",
+        refresh=True,
+    )
+
+    assert refreshed_path != original_path
+    assert not original_path.exists()
+    assert cache.resolve("example", "dataset-1") == refreshed_path
+    assert list(refreshed_path.parent.glob("artifact-*")) == [refreshed_path]
+    _assert_no_abandoned_cache_files(refreshed_path.parent)

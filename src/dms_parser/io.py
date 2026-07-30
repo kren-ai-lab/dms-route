@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -18,24 +20,48 @@ def download_file(
     chunk_size: int = 8192,
     timeout: int = 60,
 ) -> Path:
-    """Download a file from a URL to a local path."""
+    """Download a URL and atomically publish it at a local path.
+
+    The response is written to a temporary file in the destination directory.
+    The destination is replaced only after response streaming and temporary
+    file closure both complete successfully.
+    """
     output_path = Path(output_path)
 
     if output_path.exists() and not overwrite:
         return output_path
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
+    temporary_path: Path | None = None
+    failure: requests.RequestException | OSError | None = None
     try:
-        with requests.get(url, stream=True, timeout=timeout) as response:
-            response.raise_for_status()
-
-            with open(output_path, "wb") as handle:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=output_path.parent,
+            prefix=".download-",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            with requests.get(url, stream=True, timeout=timeout) as response:
+                response.raise_for_status()
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
-                        handle.write(chunk)
-    except requests.RequestException as exc:
-        raise DownloadError(f"Failed to download file from {url!r}: {exc}") from exc
+                        temporary_file.write(chunk)
+        os.replace(temporary_path, output_path)
+    except (requests.RequestException, OSError) as exc:
+        failure = exc
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            try:
+                temporary_path.unlink()
+            except OSError as exc:
+                if failure is None:
+                    failure = exc
+
+    if failure is not None:
+        raise DownloadError(
+            f"Failed to download file from {url!r}: {failure}"
+        ) from failure
 
     return output_path
 
