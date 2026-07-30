@@ -19,6 +19,7 @@ from dms_parser.exceptions import (
     SequenceValidationError,
     UnsupportedVariantError,
 )
+from dms_parser.fetch import fetch_to_cache
 from dms_parser.io import (
     download_file,
     ensure_local_copy,
@@ -72,6 +73,7 @@ __all__ = [
     "build_proteingym_dataset",
     "FilesystemCache",
     "CacheManifest",
+    "fetch_to_cache",
     "parse_variant",
     "parse_variant_token",
     "parse_variant_series",
