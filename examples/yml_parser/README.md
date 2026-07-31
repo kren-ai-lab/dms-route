@@ -1,21 +1,35 @@
 # DMS Pipeline (ProteinGym + MaveDB)
 
-A configuration-driven script built on `dms_parser` for MaveDB and ProteinGym
-datasets.
+A configuration-driven workflow built on `dms_parser` for MaveDB and
+ProteinGym datasets.
 
-The script is intentionally a thin command-line example. The installed
-package's `dms_parser.config` module owns YAML loading and validation, while
-`dms_parser.pipeline` owns source orchestration and output generation.
-Nothing under `examples/` is required implementation for library callers.
+The installed `dms-parser run` command is the primary command-line interface.
+The package's `dms_parser.config` module owns YAML loading and validation,
+while `dms_parser.pipeline` owns source orchestration and output generation.
+The pipeline also reads ProteinGym Parquet data. Installing the project
+supplies both YAML and Parquet runtime dependencies; the wrapper does not use
+those dependencies itself. Nothing under `examples/` is required
+implementation for library callers.
 
 ## Usage
 
 ```bash
 pip install -e .
-pip install -r examples/yml_parser/requirements.txt
+dms-parser run \
+    --config examples/yml_parser/config.yml
+```
+
+`run_dms_parser.py` remains a compatibility and usage wrapper for the previous
+example invocation:
+
+```bash
 python examples/yml_parser/run_dms_parser.py \
     --config examples/yml_parser/config.yml
 ```
+
+The wrapper is only a compatibility/example adapter. It prefixes the `run`
+subcommand and invokes the same installed CLI, so both forms execute the same
+public configuration and pipeline APIs.
 
 The same workflow can be called without `argparse`:
 
@@ -25,9 +39,6 @@ from dms_parser import load_pipeline_config, run_pipeline
 config = load_pipeline_config("examples/yml_parser/config.yml")
 result = run_pipeline(config)
 ```
-
-The final packaged `dms-parser` command is intentionally deferred to a later
-increment.
 
 Options:
 - `--only {all,proteingym,mavedb}` — restrict to one source (default: all)

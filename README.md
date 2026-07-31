@@ -98,6 +98,48 @@ cd parsing_dms_data
 pip install -e .
 ```
 
+### Packaged command
+
+Install the package normally. YAML configuration support and ProteinGym
+Parquet support are included as runtime dependencies:
+
+```bash
+pip install -e .
+```
+
+Inspect the installed interface:
+
+```bash
+dms-parser --help
+dms-parser run --help
+```
+
+Run both configured sources:
+
+```bash
+dms-parser run --config examples/yml_parser/config.yml
+```
+
+Restrict execution to one source:
+
+```bash
+dms-parser run \
+    --config examples/yml_parser/config.yml \
+    --only proteingym
+```
+
+Resolve metadata without downloading or processing score datasets:
+
+```bash
+dms-parser run \
+    --config examples/yml_parser/config.yml \
+    --dry-run
+```
+
+The command returns `0` when the pipeline completes without an `ERROR`
+summary row, `1` for a configuration error or a pipeline result containing an
+`ERROR`, and argparse's standard `2` for invalid command-line usage.
+
 ### Test installation
 
 ```bash
@@ -107,14 +149,19 @@ python -m pytest
 
 ### YAML example runner
 
-The YAML runner additionally requires PyYAML and parquet support:
+The installed `dms-parser run` command is the primary CLI. Installing the
+project supplies the YAML and Parquet dependencies used by the pipeline; the
+example wrapper does not require a separate dependency installation:
 
 ```bash
 pip install -e .
-pip install -r examples/yml_parser/requirements.txt
 python examples/yml_parser/run_dms_parser.py \
     --config examples/yml_parser/config.yml
 ```
+
+`run_dms_parser.py` is only a compatibility/example wrapper around the
+installed command. YAML loading and ProteinGym Parquet handling occur in the
+package's pipeline, not in the wrapper.
 
 ---
 
@@ -124,8 +171,8 @@ python examples/yml_parser/run_dms_parser.py \
 * pandas
 * numpy
 * requests
-* pyarrow (for parquet support in tests and the YAML example runner)
-* PyYAML (for the YAML example runner)
+* pyarrow (installed for ProteinGym Parquet support)
+* PyYAML (installed for YAML configuration loading)
 
 ---
 
@@ -306,10 +353,9 @@ raise SystemExit(result.exit_code)
 
 `config.py` owns YAML loading and structural validation. `pipeline.py` owns
 ProteinGym and MaveDB orchestration, dataset output, and combined summaries.
-The script under `examples/yml_parser/` is a thin usage example over these
-public APIs; essential implementation does not live under `examples/`. The
-final packaged `dms-parser` command is intentionally deferred to a later
-increment.
+The installed `dms-parser run` command is a command-line adapter over these
+public APIs. The script under `examples/yml_parser/` remains a compatibility
+wrapper; essential implementation does not live under `examples/`.
 
 ---
 
@@ -378,6 +424,7 @@ dms_parser/
 ├── builders.py        # High-level dataset construction
 ├── cache.py           # Validated filesystem artifact cache
 ├── catalog.py         # Common metadata records and source dispatch
+├── cli.py             # Installed command-line interface
 ├── config.py          # Pipeline YAML loading and validation
 ├── fetch.py           # Cache-aware staged downloads
 ├── pipeline.py        # Configuration-driven source orchestration
@@ -452,7 +499,7 @@ python -m pytest
 * [ ] Automatic WT extraction improvements
 * [ ] Integration with representation libraries (e.g., Sylphy)
 * [ ] Dataset versioning utilities
-* [ ] CLI interface
+* [x] Configuration-driven `run` command
 
 ---
 

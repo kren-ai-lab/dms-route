@@ -15,9 +15,7 @@ import dms_parser.io as io_module
 from dms_parser import (
     FilesystemCache,
     MaveDBCatalog,
-    PipelineResult,
     ProteinGymCatalog,
-    SourceConfigurationError,
     build_proteingym_dataset,
     fetch_to_cache,
 )
@@ -295,99 +293,72 @@ def test_download_exception_type_and_message_are_unchanged(
     assert exc_info.value.__cause__ is cause
 
 
-def test_example_runner_honors_log_level(
+def test_example_runner_injects_run_and_forwards_arguments(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     spec = importlib.util.spec_from_file_location("logging_runner", RUNNER_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError("Could not load the YAML example runner.")
     runner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runner)
-    configured: dict[str, object] = {}
+    calls: list[list[str]] = []
 
-    def record_configuration(**kwargs: object) -> None:
-        configured.update(kwargs)
+    def record_cli(arguments: list[str]) -> int:
+        calls.append(arguments)
+        return 7
 
-    forwarded: dict[str, object] = {}
+    monkeypatch.setattr(runner, "cli_main", record_cli)
+    arguments = [
+        "--config",
+        "config.yml",
+        "--log-level",
+        "DEBUG",
+        "--only",
+        "mavedb",
+        "--dry-run",
+    ]
 
-    def record_pipeline(config, *, only, dry_run):
-        forwarded.update(
-            {
-                "config": config,
-                "only": only,
-                "dry_run": dry_run,
-            }
-        )
-        return PipelineResult(
-            summary=[
-                {
-                    "source": "mavedb",
-                    "input": "dataset",
-                    "status": "ERROR",
-                }
-            ]
-        )
+    assert runner.main(arguments) == 7
+    assert calls == [["run", *arguments]]
 
-    monkeypatch.setattr(runner.logging, "basicConfig", record_configuration)
-    monkeypatch.setattr(
-        runner,
+
+def test_example_runner_contains_no_independent_cli_or_orchestration() -> None:
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+
+    for forbidden_name in (
+        "argparse",
+        "basicConfig",
         "load_pipeline_config",
-        lambda path: {"output": {}},
-    )
-    monkeypatch.setattr(runner, "run_pipeline", record_pipeline)
-
-    result = runner.main(
-        [
-            "--config",
-            str(tmp_path / "config.yml"),
-            "--log-level",
-            "DEBUG",
-            "--only",
-            "mavedb",
-            "--dry-run",
-        ]
-    )
-
-    assert result == 1
-    assert configured["level"] == logging.DEBUG
-    assert "%(name)s" in str(configured["format"])
-    assert forwarded == {
-        "config": {"output": {}},
-        "only": "mavedb",
-        "dry_run": True,
-    }
-    assert runner.logger.name == "dms_parser.example_runner"
+        "run_pipeline",
+        "process_proteingym",
+        "process_mavedb",
+    ):
+        assert forbidden_name not in source
 
 
-def test_example_runner_reports_configuration_failure(
+def test_example_runner_uses_process_arguments_by_default(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     spec = importlib.util.spec_from_file_location(
-        "configuration_failure_runner",
+        "default_arguments_runner",
         RUNNER_PATH,
     )
     if spec is None or spec.loader is None:
         raise RuntimeError("Could not load the YAML example runner.")
     runner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runner)
+    calls: list[list[str]] = []
 
-    def invalid_config(path: Path) -> None:
-        raise SourceConfigurationError(f"Invalid config: {path.name}")
+    def record_cli(arguments: list[str]) -> int:
+        calls.append(arguments)
+        return 0
 
-    def unexpected_pipeline(*args: object, **kwargs: object) -> None:
-        raise AssertionError("Invalid configuration reached the pipeline.")
-
-    monkeypatch.setattr(runner, "load_pipeline_config", invalid_config)
-    monkeypatch.setattr(runner, "run_pipeline", unexpected_pipeline)
-    monkeypatch.setattr(runner.logging, "basicConfig", lambda **kwargs: None)
-    caplog.set_level(logging.ERROR, logger="dms_parser.example_runner")
-
-    result = runner.main(
-        ["--config", str(tmp_path / "invalid.yml")]
+    monkeypatch.setattr(runner, "cli_main", record_cli)
+    monkeypatch.setattr(
+        runner.sys,
+        "argv",
+        ["run_dms_parser.py", "--config", "config.yml"],
     )
 
-    assert result == 1
-    assert "Configuration error: Invalid config: invalid.yml" in caplog.text
+    assert runner.main() == 0
+    assert calls == [["run", "--config", "config.yml"]]
