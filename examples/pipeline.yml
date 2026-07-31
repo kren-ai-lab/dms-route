@@ -1,0 +1,51 @@
+# pipeline.yml
+# ------------
+# Configuration for `dms-parser run`.
+#
+# Add or remove datasets and adjust build_kwargs here. `default_build_kwargs`
+# applies to every dataset in a source; an individual dataset can provide its
+# own `build_kwargs` mapping to override selected defaults.
+
+proteingym:
+  resource: dms_substitutions
+  dir_base: datasets/proteingym
+
+  default_build_kwargs:
+    score_col: DMS_score
+    variant_col: mutant
+    add_relative_score: false
+    add_binary_label: false
+    drop_failed: false
+
+  datasets:
+    - dataset_id: BLAT_ECOLX_Jacquier_2013
+    - dataset_id: ENVZ_ECOLI_Ghose_2023
+    - dataset_id: A0A247D711_LISMN_Stadelmann_2021
+    - dataset_id: HXK4_Human_Gersing_2023_activity
+    # Add more canonical ProteinGym DMS_id values below.
+    # Per-dataset overrides are optional, e.g.:
+    # - dataset_id: A4_HUMAN_Seuma_2022
+    #   build_kwargs:
+    #     drop_failed: true
+
+mavedb:
+  dir_base: datasets/mavedb
+
+  default_build_kwargs:
+    add_relative_score: false
+    add_binary_label: false
+    drop_failed: false
+
+  datasets:
+    - dataset_id: "urn:mavedb:00000001-a-4"   # UBE2I
+    - dataset_id: "urn:mavedb:00000665-a-1"   # PAX6
+    - dataset_id: "urn:mavedb:00000001-c-2"   # CALM1
+    - dataset_id: "urn:mavedb:00000080-a-2"   # avGFP
+    # Per-dataset column overrides are optional, e.g. if a score-set uses
+    # non-standard column names:
+    # - dataset_id: "urn:mavedb:00000XXX-a-1"
+    #   hgvs_col: hgvs_pro
+    #   score_col: fitness
+
+output:
+  summary_dir: datasets/summaries

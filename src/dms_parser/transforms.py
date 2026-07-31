@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from dms_parser.constants import DEFAULT_EPSILON, NEUTRAL_LABEL
 from dms_parser.exceptions import MissingWildTypeError
+
+logger = logging.getLogger(__name__)
 
 
 def compute_wt_score(
@@ -21,7 +25,7 @@ def compute_wt_score(
         raise MissingWildTypeError("No wild-type row found in dataset.")
 
     if len(wt_rows) > 1:
-        # Promedio si hay múltiples WT (caso raro pero posible)
+        # Average multiple WT measurements when a dataset provides them.
         return wt_rows[score_col].mean()
 
     return wt_rows[score_col].iloc[0]
@@ -68,6 +72,11 @@ def add_wt_relative_score(
         output_col = f"{score_col}_{method}"
 
     df[output_col] = rel
+    logger.info(
+        "Applied WT-relative transformation method=%s score_col=%s "
+        "output_col=%s rows=%d",
+        method, score_col, output_col, len(df),
+    )
 
     return df
 
@@ -103,6 +112,10 @@ def add_pseudo_binary_label(
     labels[mask_neutral] = neutral_label
 
     df[output_col] = labels
+    logger.info(
+        "Applied pseudo-binary transformation score_col=%s output_col=%s rows=%d",
+        score_col, output_col, len(df),
+    )
 
     return df
 
@@ -120,7 +133,12 @@ def add_zscore(
     std = values.std()
 
     if std == 0:
-        df[output_col or f"{score_col}_zscore"] = 0.0
+        resolved_output_col = output_col or f"{score_col}_zscore"
+        df[resolved_output_col] = 0.0
+        logger.info(
+            "Applied z-score transformation score_col=%s output_col=%s rows=%d",
+            score_col, resolved_output_col, len(df),
+        )
         return df
 
     z = (values - mean) / std
@@ -129,6 +147,7 @@ def add_zscore(
         output_col = f"{score_col}_zscore"
 
     df[output_col] = z
+    logger.info("Applied z-score transformation score_col=%s output_col=%s rows=%d", score_col, output_col, len(df))
 
     return df
 
@@ -146,7 +165,12 @@ def add_minmax(
     max_val = values.max()
 
     if max_val == min_val:
-        df[output_col or f"{score_col}_minmax"] = 0.0
+        resolved_output_col = output_col or f"{score_col}_minmax"
+        df[resolved_output_col] = 0.0
+        logger.info(
+            "Applied min-max transformation score_col=%s output_col=%s rows=%d",
+            score_col, resolved_output_col, len(df),
+        )
         return df
 
     scaled = (values - min_val) / (max_val - min_val)
@@ -155,5 +179,6 @@ def add_minmax(
         output_col = f"{score_col}_minmax"
 
     df[output_col] = scaled
+    logger.info("Applied min-max transformation score_col=%s output_col=%s rows=%d", score_col, output_col, len(df))
 
     return df

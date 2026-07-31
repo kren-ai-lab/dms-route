@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class DMSParserError(Exception):
     """Base exception for the dms_parser package."""
@@ -41,3 +45,47 @@ class DownloadError(DMSParserError):
 
 class FileFormatError(DMSParserError):
     """Raised when an input file format is unsupported or malformed."""
+
+
+class CacheError(DMSParserError):
+    """Base exception for filesystem cache failures."""
+
+
+class InvalidCacheEntryError(CacheError):
+    """Raised when a cached artifact is missing, invalid, or corrupted."""
+
+
+class CorruptCacheManifestError(InvalidCacheEntryError):
+    """Raised when a cache manifest is malformed or inconsistent."""
+
+
+class CatalogError(DMSParserError):
+    """Base exception for dataset catalog failures."""
+
+
+class InvalidCatalogQueryError(CatalogError, ValueError):
+    """Raised when catalog arguments are invalid or unsupported."""
+
+
+class DatasetNotFoundError(CatalogError, LookupError):
+    """Raised when a requested dataset is absent from a source catalog."""
+
+
+class SourceConfigurationError(DMSParserError, ValueError):
+    """Raised when source selection or configuration is invalid."""
+
+
+class UnknownSourceResourceError(SourceConfigurationError, LookupError):
+    """Raised when a requested source resource is not registered."""
+
+
+class UnsupportedSourceResourceError(SourceConfigurationError):
+    """Raised when a known resource cannot be processed by the current package."""
+
+
+class PipelineError(DMSParserError):
+    """Base exception for pipeline orchestration failures."""
+
+
+class InvalidPipelineOptionError(PipelineError, ValueError):
+    """Raised when a programmatic pipeline option is invalid."""

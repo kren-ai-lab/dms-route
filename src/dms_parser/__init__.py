@@ -2,19 +2,36 @@
 
 from __future__ import annotations
 
+import logging
+
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
+from dms_parser.cache import CacheManifest, FilesystemCache
+from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
+from dms_parser.config import load_pipeline_config, validate_pipeline_config
 from dms_parser.exceptions import (
+    CacheError,
+    CatalogError,
+    CorruptCacheManifestError,
     DMSParserError,
+    DatasetNotFoundError,
     DownloadError,
     FileFormatError,
+    InvalidCacheEntryError,
+    InvalidCatalogQueryError,
     InvalidDatasetError,
     InvalidHGVSVariantError,
+    InvalidPipelineOptionError,
     InvalidVariantError,
     MissingWildTypeError,
     MutationApplicationError,
+    PipelineError,
     SequenceValidationError,
+    SourceConfigurationError,
+    UnknownSourceResourceError,
+    UnsupportedSourceResourceError,
     UnsupportedVariantError,
 )
+from dms_parser.fetch import fetch_to_cache
 from dms_parser.io import (
     download_file,
     ensure_local_copy,
@@ -47,6 +64,15 @@ from dms_parser.transforms import (
     add_zscore,
     compute_wt_score,
 )
+from dms_parser.pipeline import PipelineResult, run_pipeline
+from dms_parser.sources.mavedb_catalog import MaveDBCatalog
+from dms_parser.sources.proteingym_catalog import ProteinGymCatalog
+from dms_parser.sources.proteingym_resources import (
+    PROTEINGYM_RESOURCES,
+    ProteinGymResource,
+    get_proteingym_resource,
+    list_proteingym_resources,
+)
 from dms_parser.validation import (
     count_invalid_sequences,
     has_wildtype_row,
@@ -63,9 +89,28 @@ from dms_parser.validation import (
     validate_wt_sequence,
 )
 
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
 __all__ = [
     "build_mavedb_dataset",
     "build_proteingym_dataset",
+    "DatasetRecord",
+    "MaveDBCatalog",
+    "ProteinGymCatalog",
+    "ProteinGymResource",
+    "PROTEINGYM_RESOURCES",
+    "get_proteingym_resource",
+    "list_proteingym_resources",
+    "list_datasets",
+    "get_dataset_metadata",
+    "load_pipeline_config",
+    "validate_pipeline_config",
+    "run_pipeline",
+    "PipelineResult",
+    "FilesystemCache",
+    "CacheManifest",
+    "fetch_to_cache",
     "parse_variant",
     "parse_variant_token",
     "parse_variant_series",
@@ -106,6 +151,17 @@ __all__ = [
     "has_wildtype_row",
     "count_invalid_sequences",
     "DMSParserError",
+    "CacheError",
+    "CatalogError",
+    "InvalidCacheEntryError",
+    "CorruptCacheManifestError",
+    "InvalidCatalogQueryError",
+    "DatasetNotFoundError",
+    "SourceConfigurationError",
+    "UnknownSourceResourceError",
+    "UnsupportedSourceResourceError",
+    "PipelineError",
+    "InvalidPipelineOptionError",
     "InvalidDatasetError",
     "MissingWildTypeError",
     "InvalidVariantError",

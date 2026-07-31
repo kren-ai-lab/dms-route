@@ -2,6 +2,9 @@
 
 > A lightweight and modular Python library for downloading, parsing, standardizing, and transforming Deep Mutational Scanning (DMS) datasets from ProteinGym and MaveDB.
 
+`dms-parser` works with already-published DMS datasets; it does not run DMS
+experiments or train predictive models.
+
 ---
 
 ## 🧠 Motivation
@@ -47,7 +50,7 @@ It is a **clean data + representation layer**.
 
 ### ✅ Dataset ingestion
 
-* ProteinGym (CSV / parquet)
+* ProteinGym substitution assays (CSV / parquet)
 * MaveDB (API-based download)
 
 ### ✅ Variant parsing
@@ -90,19 +93,24 @@ It is a **clean data + representation layer**.
 
 ## 📦 Installation
 
-### From source
-
 ```bash
 git clone https://github.com/kren-ai-lab/parsing_dms_data.git
 cd parsing_dms_data
-pip install -e .
+python -m pip install -e .
 ```
 
-### Minimal dependencies
+The normal installation includes YAML configuration and ProteinGym Parquet
+support.
+
+Inspect the installed interface:
 
 ```bash
-pip install pandas numpy requests pyarrow
+dms-parser --help
+dms-parser run --help
 ```
+
+The CLI logs at `INFO` by default; pass `--log-level DEBUG` for diagnostic
+output.
 
 ---
 
@@ -112,7 +120,8 @@ pip install pandas numpy requests pyarrow
 * pandas
 * numpy
 * requests
-* pyarrow (for parquet support)
+* pyarrow (installed for ProteinGym Parquet support)
+* PyYAML (installed for YAML configuration loading)
 
 ---
 
@@ -154,6 +163,75 @@ df.head()
 
 ---
 
+### Pipeline configuration
+
+Run every source in the example configuration:
+
+```bash
+dms-parser run --config examples/pipeline.yml
+```
+
+Use `--only proteingym` or `--only mavedb` to select one source. Use
+`--dry-run` to validate the configuration and resolve source metadata without
+downloading score tables or writing processed datasets.
+
+The YAML example selects the logical ProteinGym resource owned by the library
+instead of repeating official URLs:
+
+```yaml
+proteingym:
+  resource: dms_substitutions
+  dir_base: datasets/proteingym
+  datasets:
+    - dataset_id: BLAT_ECOLX_Jacquier_2013
+      build_kwargs:
+        drop_failed: true
+
+mavedb:
+  dir_base: datasets/mavedb
+  datasets:
+    - dataset_id: "urn:mavedb:00000001-a-4"
+```
+
+Each source section can list multiple `dataset_id` entries, which are processed
+independently in one pipeline run.
+
+ProteinGym registers `dms_substitutions`, `dms_indels`,
+`clinical_substitutions`, and `clinical_indels`. Only `dms_substitutions` is
+currently processable; selecting another registered resource for processing
+raises a clear error before downloading. ProteinGym uses its canonical
+`DMS_id` as `dataset_id`. MaveDB uses the score-set URN.
+
+Source-level `default_build_kwargs` apply to every dataset. A dataset's own
+`build_kwargs` are deep-merged over those defaults. Score transformations are
+opt-in. `drop_failed: false` retains unsupported and error rows for
+traceability; `true` saves only rows whose status is `OK`.
+
+Processed CSV files are written under each source's
+`<dir_base>/processed/` directory. The configured `output.summary_dir`
+receives combined CSV and JSON summaries. One failed dataset does not abort
+the remaining batch, and any `ERROR` summary row produces exit code `1`.
+
+Configuration loading and pipeline orchestration are also available directly
+from the installed package:
+
+```python
+from dms_parser import load_pipeline_config, run_pipeline
+
+config = load_pipeline_config("examples/pipeline.yml")
+result = run_pipeline(config)
+
+print(result.summary)
+raise SystemExit(result.exit_code)
+```
+
+`config.py` owns YAML loading and structural validation. `pipeline.py` owns
+ProteinGym and MaveDB orchestration, dataset output, and combined summaries.
+The installed `dms-parser run` command is a command-line adapter over these
+public APIs.
+
+---
+
 ## 🧬 Standardized Dataset Schema
 
 All datasets are transformed into a common structure:
@@ -178,6 +256,11 @@ Optional:
 ---
 
 ## 🔬 Transformations
+
+Numerical score transformations are opt-in. When transformation arguments are
+omitted, both dataset builders preserve source values in `score_raw`. Request
+WT-relative scores, pseudo-binary labels, z-scores, or min-max scaling
+explicitly when they are needed.
 
 ### WT-relative scoring
 
@@ -212,6 +295,12 @@ The library is organized into modular components:
 ```text
 dms_parser/
 ├── builders.py        # High-level dataset construction
+├── cache.py           # Validated filesystem artifact cache
+├── catalog.py         # Common metadata records and source dispatch
+├── cli.py             # Installed command-line interface
+├── config.py          # Pipeline YAML loading and validation
+├── fetch.py           # Cache-aware staged downloads
+├── pipeline.py        # Configuration-driven source orchestration
 ├── parsing.py         # Variant parsing logic
 ├── transforms.py      # Score transformations
 ├── validation.py      # Dataset and sequence validation
@@ -221,7 +310,10 @@ dms_parser/
 ├── types.py           # Type definitions
 └── sources/
     ├── mavedb.py
-    └── proteingym.py
+    ├── mavedb_catalog.py
+    ├── proteingym.py
+    ├── proteingym_catalog.py
+    └── proteingym_resources.py
 ```
 
 ---
@@ -252,13 +344,14 @@ dms_parser/
 
 ## 📓 Examples
 
-See the `notebooks/` directory:
+See the `examples/` directory:
 
 ```text
-01_quickstart_proteingym_download.ipynb
-02_quickstart_mavedb_download.ipynb
-03_variant_parsing_and_reconstruction.ipynb
-04_transforms_and_pseudo_labels.ipynb
+examples/01_quickstart_proteingym.ipynb
+examples/02_quickstart_mavedb_download.ipynb
+examples/03_variant_parsing_and_reconstruction.ipynb
+examples/04_transforms_and_pseudo_labels.ipynb
+examples/pipeline.yml
 ```
 
 ---
@@ -268,7 +361,8 @@ See the `notebooks/` directory:
 Run the full test suite:
 
 ```bash
-pytest tests/ -q
+python -m pip install -e ".[dev]"
+python -m pytest
 ```
 
 ---
@@ -279,7 +373,7 @@ pytest tests/ -q
 * [ ] Automatic WT extraction improvements
 * [ ] Integration with representation libraries (e.g., Sylphy)
 * [ ] Dataset versioning utilities
-* [ ] CLI interface
+* [x] Configuration-driven `run` command
 
 ---
 

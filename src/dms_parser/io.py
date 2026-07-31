@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import os
+import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import pandas as pd
 import requests
 
 from dms_parser.exceptions import DownloadError, FileFormatError
+
+logger = logging.getLogger(__name__)
 
 
 def download_file(
@@ -18,25 +24,60 @@ def download_file(
     chunk_size: int = 8192,
     timeout: int = 60,
 ) -> Path:
-    """Download a file from a URL to a local path."""
+    """Download a URL and atomically publish it at a local path.
+
+    The response is written to a temporary file in the destination directory.
+    The destination is replaced only after response streaming and temporary
+    file closure both complete successfully.
+    """
     output_path = Path(output_path)
+    logger.debug("Resolved download output path=%s", output_path)
 
     if output_path.exists() and not overwrite:
+        logger.info("Using existing download destination path=%s", output_path)
         return output_path
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
+    logger.info("Starting download destination=%s", output_path)
+    logger.debug(
+        "Requesting download endpoint=%s timeout=%s chunk_size=%s",
+        _sanitize_url_for_logging(url), timeout, chunk_size,
+    )
+    temporary_path: Path | None = None
+    failure: requests.RequestException | OSError | None = None
+    downloaded_bytes = 0
     try:
-        with requests.get(url, stream=True, timeout=timeout) as response:
-            response.raise_for_status()
-
-            with open(output_path, "wb") as handle:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=output_path.parent,
+            prefix=".download-",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            with requests.get(url, stream=True, timeout=timeout) as response:
+                response.raise_for_status()
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
-                        handle.write(chunk)
-    except requests.RequestException as exc:
-        raise DownloadError(f"Failed to download file from {url!r}: {exc}") from exc
+                        temporary_file.write(chunk)
+                        downloaded_bytes += len(chunk)
+        os.replace(temporary_path, output_path)
+    except (requests.RequestException, OSError) as exc:
+        failure = exc
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            try:
+                temporary_path.unlink()
+            except OSError as exc:
+                if failure is None:
+                    failure = exc
 
+    if failure is not None:
+        raise DownloadError(
+            f"Failed to download file from {url!r}: {failure}"
+        ) from failure
+
+    logger.info("Completed download destination=%s", output_path)
+    logger.debug("Downloaded bytes=%d destination=%s", downloaded_bytes, output_path)
     return output_path
 
 
@@ -90,6 +131,7 @@ def read_table(
         raise FileNotFoundError(f"File not found: {path}")
 
     suffix = path.suffix.lower()
+    logger.debug("Reading table path=%s suffix=%s", path, suffix or "<none>")
 
     try:
         if suffix == ".parquet":
@@ -126,22 +168,27 @@ def write_table(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     suffix = path.suffix.lower()
+    logger.debug("Resolved table output path=%s suffix=%s rows=%d", path, suffix or "<none>", len(df))
 
     try:
         if suffix == ".parquet":
             df.to_parquet(path, index=index, **kwargs)
+            logger.info("Completed table write path=%s rows=%d", path, len(df))
             return path
 
         if sep is not None:
             df.to_csv(path, sep=sep, index=index, **kwargs)
+            logger.info("Completed table write path=%s rows=%d", path, len(df))
             return path
 
         if suffix in {".tsv", ".txt"}:
             df.to_csv(path, sep="\t", index=index, **kwargs)
+            logger.info("Completed table write path=%s rows=%d", path, len(df))
             return path
 
         if suffix in {".csv", ""}:
             df.to_csv(path, index=index, **kwargs)
+            logger.info("Completed table write path=%s rows=%d", path, len(df))
             return path
 
         raise FileFormatError(
@@ -151,3 +198,16 @@ def write_table(
         if isinstance(exc, FileFormatError):
             raise
         raise FileFormatError(f"Failed to write table to {path!s}: {exc}") from exc
+
+
+def _sanitize_url_for_logging(url: str) -> str:
+    """Return a URL endpoint without credentials, query parameters, or fragments."""
+    try:
+        parts = urlsplit(url)
+        hostname = parts.hostname or ""
+        if ":" in hostname:
+            hostname = f"[{hostname}]"
+        port = f":{parts.port}" if parts.port is not None else ""
+        return urlunsplit((parts.scheme, f"{hostname}{port}", parts.path, "", ""))
+    except (TypeError, ValueError):
+        return "<invalid-url>"
