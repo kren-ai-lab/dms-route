@@ -18,6 +18,12 @@ from dms_parser.sources.proteingym import (
     load_proteingym_from_url,
 )
 from dms_parser.sources.proteingym_catalog import ProteinGymCatalog
+from dms_parser.sources.proteingym_resources import (
+    PROTEINGYM_RESOURCES,
+    ProteinGymResource,
+    get_proteingym_resource,
+    list_proteingym_resources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +34,10 @@ __all__ = [
     "load_mavedb_from_url",
     "ensure_local_mavedb_copy",
     "ProteinGymCatalog",
+    "ProteinGymResource",
+    "PROTEINGYM_RESOURCES",
+    "get_proteingym_resource",
+    "list_proteingym_resources",
     "download_proteingym_dataset",
     "load_proteingym_dataset",
     "load_proteingym_from_url",

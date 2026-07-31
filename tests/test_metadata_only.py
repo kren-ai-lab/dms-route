@@ -105,10 +105,10 @@ def test_mavedb_metadata_only_skips_dataset_acquisition(
     result = runner.process_mavedb(
         {
             "dir_base": source_root,
-            "base_url": base_url,
-            "datasets": [{"urn": urn}],
+            "datasets": [{"dataset_id": urn}],
         },
         dry_run=True,
+        base_url=base_url,
     )
 
     assert requested_urls == [f"{base_url}/score-sets/{urn}"]
@@ -143,14 +143,13 @@ def test_proteingym_metadata_only_skips_benchmark_and_processing(
             "UniProt_ID": ["P12345"],
         }
     ).to_csv(metadata_path, index=False)
-    metadata_url = "https://example.test/metadata.csv"
-    benchmark_url = "https://example.test/benchmark.parquet"
+    resource = runner.get_proteingym_resource("dms_substitutions")
     requested_urls: list[str] = []
 
     def metadata_download(url, output_path, *, overwrite=False):
         assert overwrite is False
         requested_urls.append(url)
-        if url == benchmark_url:
+        if url == resource.data_url:
             raise AssertionError("Metadata-only mode requested the benchmark archive.")
         assert Path(output_path) == metadata_path
         return metadata_path
@@ -159,19 +158,18 @@ def test_proteingym_metadata_only_skips_benchmark_and_processing(
 
     result = runner.process_proteingym(
         {
+            "resource": "dms_substitutions",
             "dir_base": source_root,
-            "metadata_url": metadata_url,
-            "benchmark_url": benchmark_url,
-            "datasets": [{"filename": "experiment.csv"}],
+            "datasets": [{"dataset_id": "experiment-1"}],
         },
         dry_run=True,
     )
 
-    assert requested_urls == [metadata_url]
+    assert requested_urls == [resource.metadata_url]
     assert result == [
         {
             "source": "proteingym",
-            "input": "experiment.csv",
+            "input": "experiment-1",
             "status": "DRY_RUN",
             "dataset_id": "experiment-1",
             "target_protein": "P12345",
@@ -208,7 +206,19 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
             return ScoresResponse()
         return MetadataResponse(
             {
-                "targetGenes": [{"name": "GENE1"}],
+                "targetGenes": [
+                    {
+                        "name": "GENE1",
+                        "externalIdentifiers": [
+                            {
+                                "identifier": {
+                                    "dbName": "UniProt",
+                                    "identifier": "P12345",
+                                }
+                            }
+                        ],
+                    }
+                ],
                 "targetSequence": {"sequence": "MKT"},
             }
         )
@@ -223,10 +233,10 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
     result = runner.process_mavedb(
         {
             "dir_base": source_root,
-            "base_url": base_url,
-            "datasets": [{"urn": urn}],
+            "datasets": [{"dataset_id": urn}],
         },
         dry_run=False,
+        base_url=base_url,
     )
 
     assert requested_urls == [
@@ -234,8 +244,13 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
         f"{base_url}/score-sets/{urn}/scores",
     ]
     assert len(builder_calls) == 1
-    assert "add_relative_score" not in builder_calls[0]
-    assert "add_binary_label" not in builder_calls[0]
+    assert builder_calls[0]["dataset_id"] == urn
+    assert builder_calls[0]["gene"] == "GENE1"
+    assert builder_calls[0]["protein_id"] is None
+    assert builder_calls[0]["uniprot_id"] == "P12345"
+    assert builder_calls[0]["add_relative_score"] is False
+    assert builder_calls[0]["add_binary_label"] is False
+    assert builder_calls[0]["drop_failed"] is False
     assert result[0]["status"] == "OK"
     assert (source_root / "raw").exists()
     assert (source_root / "processed").exists()
@@ -282,10 +297,10 @@ def test_normal_mavedb_rejects_failed_scores_response(
     result = runner.process_mavedb(
         {
             "dir_base": source_root,
-            "base_url": base_url,
-            "datasets": [{"urn": urn}],
+            "datasets": [{"dataset_id": urn}],
         },
         dry_run=False,
+        base_url=base_url,
     )
 
     assert requested_urls == [
@@ -306,8 +321,7 @@ def test_normal_proteingym_execution_keeps_existing_acquisition_path(
     runner,
 ):
     source_root = tmp_path / "proteingym"
-    metadata_url = "https://example.test/metadata.csv"
-    benchmark_url = "https://example.test/benchmark.parquet"
+    resource = runner.get_proteingym_resource("dms_substitutions")
     downloaded_urls: list[str] = []
     builder_calls: list[dict] = []
     metadata = pd.DataFrame(
@@ -316,6 +330,8 @@ def test_normal_proteingym_execution_keeps_existing_acquisition_path(
             "DMS_id": ["experiment-1"],
             "target_seq": ["MKT"],
             "UniProt_ID": ["P12345"],
+            "molecule_name": ["Example protein"],
+            "gene": ["GENE1"],
         }
     )
     benchmark = pd.DataFrame(
@@ -348,18 +364,22 @@ def test_normal_proteingym_execution_keeps_existing_acquisition_path(
 
     result = runner.process_proteingym(
         {
+            "resource": "dms_substitutions",
             "dir_base": source_root,
-            "metadata_url": metadata_url,
-            "benchmark_url": benchmark_url,
-            "datasets": [{"filename": "experiment.csv"}],
+            "datasets": [{"dataset_id": "experiment-1"}],
         },
         dry_run=False,
     )
 
-    assert downloaded_urls == [metadata_url, benchmark_url]
+    assert downloaded_urls == [resource.metadata_url, resource.data_url]
     assert len(builder_calls) == 1
-    assert "add_relative_score" not in builder_calls[0]
-    assert "add_binary_label" not in builder_calls[0]
+    assert builder_calls[0]["dataset_id"] == "experiment-1"
+    assert builder_calls[0]["protein_id"] == "Example protein"
+    assert builder_calls[0]["gene"] == "GENE1"
+    assert builder_calls[0]["uniprot_id"] == "P12345"
+    assert builder_calls[0]["add_relative_score"] is False
+    assert builder_calls[0]["add_binary_label"] is False
+    assert builder_calls[0]["drop_failed"] is False
     assert result[0]["status"] == "OK"
     assert (source_root / "raw").exists()
     assert (source_root / "processed").exists()

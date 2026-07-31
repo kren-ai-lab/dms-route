@@ -69,3 +69,15 @@ class InvalidCatalogQueryError(CatalogError, ValueError):
 
 class DatasetNotFoundError(CatalogError, LookupError):
     """Raised when a requested dataset is absent from a source catalog."""
+
+
+class SourceConfigurationError(DMSParserError, ValueError):
+    """Raised when source selection or configuration is invalid."""
+
+
+class UnknownSourceResourceError(SourceConfigurationError, LookupError):
+    """Raised when a requested source resource is not registered."""
+
+
+class UnsupportedSourceResourceError(SourceConfigurationError):
+    """Raised when a known resource cannot be processed by the current package."""

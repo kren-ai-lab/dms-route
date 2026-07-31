@@ -23,6 +23,9 @@ from dms_parser.exceptions import (
     MissingWildTypeError,
     MutationApplicationError,
     SequenceValidationError,
+    SourceConfigurationError,
+    UnknownSourceResourceError,
+    UnsupportedSourceResourceError,
     UnsupportedVariantError,
 )
 from dms_parser.fetch import fetch_to_cache
@@ -60,6 +63,12 @@ from dms_parser.transforms import (
 )
 from dms_parser.sources.mavedb_catalog import MaveDBCatalog
 from dms_parser.sources.proteingym_catalog import ProteinGymCatalog
+from dms_parser.sources.proteingym_resources import (
+    PROTEINGYM_RESOURCES,
+    ProteinGymResource,
+    get_proteingym_resource,
+    list_proteingym_resources,
+)
 from dms_parser.validation import (
     count_invalid_sequences,
     has_wildtype_row,
@@ -85,6 +94,10 @@ __all__ = [
     "DatasetRecord",
     "MaveDBCatalog",
     "ProteinGymCatalog",
+    "ProteinGymResource",
+    "PROTEINGYM_RESOURCES",
+    "get_proteingym_resource",
+    "list_proteingym_resources",
     "list_datasets",
     "get_dataset_metadata",
     "FilesystemCache",
@@ -136,6 +149,9 @@ __all__ = [
     "CorruptCacheManifestError",
     "InvalidCatalogQueryError",
     "DatasetNotFoundError",
+    "SourceConfigurationError",
+    "UnknownSourceResourceError",
+    "UnsupportedSourceResourceError",
     "InvalidDatasetError",
     "MissingWildTypeError",
     "InvalidVariantError",

@@ -311,10 +311,7 @@ def test_example_runner_honors_log_level(
     monkeypatch.setattr(
         runner,
         "load_config",
-        lambda path: {
-            "proteingym": {"enabled": False},
-            "mavedb": {"enabled": False},
-        },
+        lambda path: {"output": {}},
     )
     monkeypatch.setattr(runner, "print_report", lambda summary: None)
 

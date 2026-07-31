@@ -20,13 +20,22 @@ Options:
 ## Adding datasets
 
 Edit `config.yml` — no code changes needed:
-- ProteinGym: add a filename (must exist in `DMS_substitutions.csv`) under
-  `proteingym.datasets`.
-- MaveDB: add a URN under `mavedb.datasets`.
+
+- ProteinGym selects a registered resource and lists canonical `DMS_id` values
+  as `dataset_id`. Only `dms_substitutions` is currently processable.
+- MaveDB lists canonical score-set URNs as `dataset_id`.
+- Include a source section to run it; omit the section to skip that source.
 
 Each entry can carry its own `build_kwargs` block, deep-merged over
-`default_build_kwargs`, to override settings (e.g. `delta`, `relative_method`,
-or MaveDB's `hgvs_col`/`score_col`) for just that dataset.
+`default_build_kwargs`, to override builder settings such as `delta` or
+`relative_method` for just that dataset. For MaveDB, `hgvs_col` and `score_col`
+are direct keys on the dataset entry, alongside `dataset_id`, because the
+runner uses them to select source-table columns before calling the builder.
+
+Score transformations are disabled unless explicitly enabled. Set
+`drop_failed: true` to save only rows with `status == "OK"`; with the default
+`false`, unsupported and error rows remain in the processed table for
+traceability.
 
 ## Output
 

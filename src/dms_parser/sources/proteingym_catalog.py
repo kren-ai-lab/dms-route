@@ -25,17 +25,14 @@ from dms_parser.exceptions import (
     InvalidCatalogQueryError,
 )
 from dms_parser.fetch import fetch_to_cache
+from dms_parser.sources.proteingym_resources import get_proteingym_resource
 
 logger = logging.getLogger(__name__)
 
-PROTEINGYM_SUBSTITUTIONS_URL = (
-    "https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/main/"
-    "reference_files/DMS_substitutions.csv"
-)
-PROTEINGYM_INDELS_URL = (
-    "https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/main/"
-    "reference_files/DMS_indels.csv"
-)
+PROTEINGYM_SUBSTITUTIONS_URL = get_proteingym_resource(
+    "dms_substitutions"
+).metadata_url
+PROTEINGYM_INDELS_URL = get_proteingym_resource("dms_indels").metadata_url
 PROTEINGYM_SUBSTITUTIONS_CACHE_ID = "reference-files-dms-substitutions"
 PROTEINGYM_INDELS_CACHE_ID = "reference-files-dms-indels"
 

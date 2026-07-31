@@ -258,6 +258,41 @@ would be ambiguous; call each source separately.
 
 ---
 
+### Source configuration
+
+The YAML example selects the logical ProteinGym resource owned by the library
+instead of repeating official URLs:
+
+```yaml
+proteingym:
+  resource: dms_substitutions
+  dir_base: datasets/proteingym
+  datasets:
+    - dataset_id: BLAT_ECOLX_Jacquier_2013
+
+mavedb:
+  dir_base: datasets/mavedb
+  datasets:
+    - dataset_id: "urn:mavedb:00000001-a-4"
+```
+
+ProteinGym registers `dms_substitutions`, `dms_indels`,
+`clinical_substitutions`, and `clinical_indels`. Only `dms_substitutions` is
+currently processable; selecting another registered resource for processing
+raises a clear error before downloading. ProteinGym uses its canonical
+`DMS_id` as `dataset_id`. MaveDB uses the score-set URN.
+
+Gene or target searches are discovery operations and may return multiple
+MaveDB score sets. They are not reproducible download identities. Advanced
+Python callers may still override catalog or download endpoints for mirrors
+and tests where those APIs support overrides.
+
+Score transformations remain opt-in. The YAML runner's `drop_failed` option
+controls traceability: `false` retains unsupported and error rows, while
+`true` saves only rows whose status is `OK`.
+
+---
+
 ## 🧬 Standardized Dataset Schema
 
 All datasets are transformed into a common structure:
@@ -335,7 +370,8 @@ dms_parser/
     ├── mavedb.py
     ├── mavedb_catalog.py
     ├── proteingym.py
-    └── proteingym_catalog.py
+    ├── proteingym_catalog.py
+    └── proteingym_resources.py
 ```
 
 ---
