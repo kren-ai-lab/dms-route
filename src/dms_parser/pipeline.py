@@ -111,12 +111,8 @@ def process_proteingym(
     metadata_path = dir_base / resource.metadata_filename
     benchmark_path = dir_base / resource.data_filename
     logger.debug(
-        "[proteingym] Resolved paths metadata=%s benchmark=%s output=%s "
-        "dry_run=%s",
-        metadata_path,
-        benchmark_path,
-        output_dir,
-        dry_run,
+        "[proteingym] Resolved paths metadata=%s benchmark=%s output=%s dry_run=%s",
+        metadata_path, benchmark_path, output_dir, dry_run,
     )
 
     if not dry_run:
@@ -136,14 +132,10 @@ def process_proteingym(
         logger.info(
             "[proteingym] Metadata: %d available experiments. "
             "Base table: %d mutations.",
-            metadata_table.shape[0],
-            benchmark_table.shape[0],
+            metadata_table.shape[0], benchmark_table.shape[0],
         )
     else:
-        logger.info(
-            "[proteingym] Metadata: %d available experiments.",
-            metadata_table.shape[0],
-        )
+        logger.info("[proteingym] Metadata: %d available experiments.", metadata_table.shape[0])
 
     default_build_kwargs = source_config.get("default_build_kwargs", {})
     entries = source_config.get("datasets", [])
@@ -151,12 +143,7 @@ def process_proteingym(
 
     for index, entry in enumerate(entries):
         dataset_id = entry["dataset_id"]
-        logger.info(
-            "[proteingym] %d/%d Processing: %s",
-            index + 1,
-            len(entries),
-            dataset_id,
-        )
+        logger.info("[proteingym] %d/%d Processing: %s", index + 1, len(entries), dataset_id)
         row: dict[str, Any] = {
             "source": "proteingym",
             "input": dataset_id,
@@ -182,10 +169,8 @@ def process_proteingym(
             if source_filename is None:
                 source_filename = f"{dataset_id}.csv"
             logger.debug(
-                "[proteingym] Resolved WT source=reference_metadata "
-                "dataset_id=%s length=%d",
-                resolved_dataset_id,
-                len(wt_sequence),
+                "[proteingym] Resolved WT source=reference_metadata dataset_id=%s length=%d",
+                resolved_dataset_id, len(wt_sequence),
             )
 
             row.update(
@@ -200,10 +185,7 @@ def process_proteingym(
             if dry_run:
                 row["status"] = "DRY_RUN"
                 summary.append(row)
-                logger.info(
-                    "[proteingym] (dry-run) metadata resolved for %s",
-                    resolved_dataset_id,
-                )
+                logger.info("[proteingym] (dry-run) metadata resolved for %s", resolved_dataset_id)
                 continue
 
             if benchmark_table is None:
@@ -232,9 +214,7 @@ def process_proteingym(
             logger.debug(
                 "[proteingym] Detected columns dataset_id=%s variant_col=%s "
                 "score_col=%s",
-                resolved_dataset_id,
-                build_kwargs["variant_col"],
-                build_kwargs["score_col"],
+                resolved_dataset_id, build_kwargs["variant_col"], build_kwargs["score_col"],
             )
 
             write_table(experiment_table, raw_path, index=False)
@@ -250,11 +230,7 @@ def process_proteingym(
                 output_dir / f"{resolved_dataset_id}_processed.csv"
             )
             built_table.to_csv(output_file, index=False)
-            logger.debug(
-                "[proteingym] Resolved output dataset_id=%s path=%s",
-                resolved_dataset_id,
-                output_file,
-            )
+            logger.debug("[proteingym] Resolved output dataset_id=%s path=%s", resolved_dataset_id, output_file)
 
             row.update(
                 {
@@ -264,17 +240,10 @@ def process_proteingym(
                     "output_file": str(output_file),
                 }
             )
-            logger.info(
-                "[proteingym] Complete. Retained rows: %d/%d",
-                saved_rows,
-                initial_rows,
-            )
+            logger.info("[proteingym] Complete. Retained rows: %d/%d", saved_rows, initial_rows)
         except Exception as exc:  # noqa: BLE001 - isolate dataset failures
             row["error"] = str(exc)
-            logger.exception(
-                "[proteingym] Error processing %s",
-                dataset_id,
-            )
+            logger.exception("[proteingym] Error processing %s", dataset_id)
 
         summary.append(row)
 
@@ -293,12 +262,7 @@ def process_mavedb(
     dir_base = Path(source_config["dir_base"])
     data_dir = dir_base / "raw"
     output_dir = dir_base / "processed"
-    logger.debug(
-        "[mavedb] Resolved paths raw=%s output=%s dry_run=%s",
-        data_dir,
-        output_dir,
-        dry_run,
-    )
+    logger.debug("[mavedb] Resolved paths raw=%s output=%s dry_run=%s", data_dir, output_dir, dry_run)
     if not dry_run:
         _ensure_dirs(data_dir, output_dir)
 
@@ -309,12 +273,7 @@ def process_mavedb(
 
     for index, entry in enumerate(entries):
         dataset_id = entry["dataset_id"]
-        logger.info(
-            "[mavedb] %d/%d Processing URN: %s",
-            index + 1,
-            len(entries),
-            dataset_id,
-        )
+        logger.info("[mavedb] %d/%d Processing URN: %s", index + 1, len(entries), dataset_id)
         row: dict[str, Any] = {
             "source": "mavedb",
             "input": dataset_id,
@@ -340,10 +299,8 @@ def process_mavedb(
             if wt_sequence is None:
                 raise ValueError("No WT found in metadata.")
             logger.debug(
-                "[mavedb] Resolved WT source=score_set_metadata "
-                "dataset_id=%s length=%d",
-                dataset_id,
-                len(wt_sequence),
+                "[mavedb] Resolved WT source=score_set_metadata dataset_id=%s length=%d",
+                dataset_id, len(wt_sequence),
             )
 
             row.update(
@@ -358,10 +315,7 @@ def process_mavedb(
             if dry_run:
                 row["status"] = "DRY_RUN"
                 summary.append(row)
-                logger.info(
-                    "[mavedb] (dry-run) metadata resolved for %s",
-                    dataset_id,
-                )
+                logger.info("[mavedb] (dry-run) metadata resolved for %s", dataset_id)
                 continue
 
             scores_response = requests.get(
@@ -391,11 +345,8 @@ def process_mavedb(
             if not hgvs_col or not score_col:
                 raise ValueError("Neither score nor HGVS columns were detected.")
             logger.debug(
-                "[mavedb] Detected columns dataset_id=%s variant_col=%s "
-                "score_col=%s",
-                dataset_id,
-                hgvs_col,
-                score_col,
+                "[mavedb] Detected columns dataset_id=%s variant_col=%s score_col=%s",
+                dataset_id, hgvs_col, score_col,
             )
             row["raw_rows"] = initial_rows
 
@@ -425,11 +376,7 @@ def process_mavedb(
                 output_dir / f"{dataset_id.replace(':', '_')}_processed.csv"
             )
             built_table.to_csv(output_file, index=False)
-            logger.debug(
-                "[mavedb] Resolved output dataset_id=%s path=%s",
-                dataset_id,
-                output_file,
-            )
+            logger.debug("[mavedb] Resolved output dataset_id=%s path=%s", dataset_id, output_file)
 
             row.update(
                 {
@@ -439,11 +386,7 @@ def process_mavedb(
                     "output_file": str(output_file),
                 }
             )
-            logger.info(
-                "[mavedb] Complete. Retained: %d/%d",
-                saved_rows,
-                initial_rows,
-            )
+            logger.info("[mavedb] Complete. Retained: %d/%d", saved_rows, initial_rows)
         except Exception as exc:  # noqa: BLE001 - isolate dataset failures
             row["error"] = str(exc)
             logger.exception("[mavedb] Error processing %s", dataset_id)
@@ -493,28 +436,16 @@ def log_summary(summary: list[dict[str, Any]]) -> None:
 
     logger.info("=" * 60)
     logger.info("FINAL SUMMARY: %d processed datasets", len(summary))
-    logger.info(
-        "  OK: %d | ERROR: %d | DRY_RUN: %d",
-        ok_count,
-        error_count,
-        dry_run_count,
-    )
+    logger.info("  OK: %d | ERROR: %d | DRY_RUN: %d", ok_count, error_count, dry_run_count)
     for row in summary:
         if row["status"] == "OK":
             logger.info(
                 "  [OK]    %-12s %-30s %s/%s rows",
-                row["source"],
-                row.get("dataset_id", row["input"]),
-                row.get("validated_rows"),
-                row.get("raw_rows"),
+                row["source"], row.get("dataset_id", row["input"]),
+                row.get("validated_rows"), row.get("raw_rows"),
             )
         elif row["status"] == "ERROR":
-            logger.info(
-                "  [ERROR] %-12s %-30s %s",
-                row["source"],
-                row["input"],
-                row.get("error", ""),
-            )
+            logger.info("  [ERROR] %-12s %-30s %s", row["source"], row["input"], row.get("error", ""))
     logger.info("=" * 60)
 
 

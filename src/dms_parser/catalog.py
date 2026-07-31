@@ -204,11 +204,7 @@ def _resolve_catalog(
             raise InvalidCatalogQueryError(
                 f"The injected catalog does not match source {source!r}."
             )
-        logger.debug(
-            "Selected injected catalog adapter source=%s adapter=%s",
-            source,
-            type(catalog).__name__,
-        )
+        logger.debug("Selected injected catalog adapter source=%s adapter=%s", source, type(catalog).__name__)
         return catalog
 
     if source == "mavedb":
@@ -221,19 +217,11 @@ def _resolve_catalog(
                 "refresh is only supported for the ProteinGym catalog."
             )
         adapter = MaveDBCatalog()
-        logger.debug(
-            "Selected default catalog adapter source=%s adapter=%s",
-            source,
-            type(adapter).__name__,
-        )
+        logger.debug("Selected default catalog adapter source=%s adapter=%s", source, type(adapter).__name__)
         return adapter
 
     adapter = ProteinGymCatalog(cache=cache, refresh=refresh)
-    logger.debug(
-        "Selected default catalog adapter source=%s adapter=%s",
-        source,
-        type(adapter).__name__,
-    )
+    logger.debug("Selected default catalog adapter source=%s adapter=%s", source, type(adapter).__name__)
     return adapter
 
 

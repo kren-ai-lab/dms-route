@@ -1,4 +1,0 @@
-pandas
-PyYAML
-pyarrow
-requests

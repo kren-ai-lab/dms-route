@@ -26,7 +26,7 @@ from dms_parser.sources.proteingym_catalog import (
     ProteinGymCatalog,
 )
 
-CONFIG_PATH = Path(__file__).parents[1] / "examples" / "yml_parser" / "config.yml"
+CONFIG_PATH = Path(__file__).parents[1] / "examples" / "pipeline.yml"
 
 VALID_MAVEDB_SCORE_SET_URNS = (
     "urn:mavedb:00000001-a-1",

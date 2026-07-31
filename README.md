@@ -93,22 +93,14 @@ It is a **clean data + representation layer**.
 
 ## 📦 Installation
 
-### Library installation
-
 ```bash
 git clone https://github.com/kren-ai-lab/parsing_dms_data.git
 cd parsing_dms_data
-pip install -e .
+python -m pip install -e .
 ```
 
-### Packaged command
-
-Install the package normally. YAML configuration support and ProteinGym
-Parquet support are included as runtime dependencies:
-
-```bash
-pip install -e .
-```
+The normal installation includes YAML configuration and ProteinGym Parquet
+support.
 
 Inspect the installed interface:
 
@@ -117,55 +109,8 @@ dms-parser --help
 dms-parser run --help
 ```
 
-Run both configured sources:
-
-```bash
-dms-parser run --config examples/yml_parser/config.yml
-```
-
-Restrict execution to one source:
-
-```bash
-dms-parser run \
-    --config examples/yml_parser/config.yml \
-    --only proteingym
-```
-
-Validate the configuration and resolve source metadata without downloading or
-processing score datasets:
-
-```bash
-dms-parser run \
-    --config examples/yml_parser/config.yml \
-    --dry-run
-```
-
-The command returns `0` when the pipeline completes without an `ERROR`
-summary row, `1` for a configuration error or a pipeline result containing an
-`ERROR`, and argparse's standard `2` for invalid command-line usage.
-
-### Test installation
-
-```bash
-pip install -e ".[dev]"
-python -m pytest
-```
-
-### YAML example runner
-
-The installed `dms-parser run` command is the primary CLI. Installing the
-project supplies the YAML and Parquet dependencies used by the pipeline; the
-example wrapper does not require a separate dependency installation:
-
-```bash
-pip install -e .
-python examples/yml_parser/run_dms_parser.py \
-    --config examples/yml_parser/config.yml
-```
-
-`run_dms_parser.py` is only a compatibility/example wrapper around the
-installed command. YAML loading and ProteinGym Parquet handling occur in the
-package's pipeline, not in the wrapper.
+The CLI logs at `INFO` by default; pass `--log-level DEBUG` for diagnostic
+output.
 
 ---
 
@@ -218,98 +163,17 @@ df.head()
 
 ---
 
-### Cached downloads
+### Pipeline configuration
 
-`FilesystemCache` stores artifacts by source and dataset identifier with a
-manifest containing the original URL, download time, file size, and SHA-256
-checksum. `fetch_to_cache` returns valid cache hits without a network request
-and uses atomic downloading and publication for misses or refreshes.
+Run every source in the example configuration:
 
-```python
-from dms_parser import FilesystemCache, fetch_to_cache
-
-cache = FilesystemCache("datasets/cache")
-path = fetch_to_cache(
-    "https://example.org/experiment.csv",
-    source="proteingym",
-    dataset_id="experiment-1",
-    cache=cache,
-)
+```bash
+dms-parser run --config examples/pipeline.yml
 ```
 
-Pass `refresh=True` to retrieve and safely publish a new copy.
-
----
-
-### Logging
-
-Importing `dms_parser` does not configure application logging. Applications
-can enable library lifecycle messages with the standard library:
-
-```python
-import logging
-
-logging.basicConfig(level=logging.INFO)
-```
-
-To enable diagnostic output for only this package:
-
-```python
-logging.getLogger("dms_parser").setLevel(logging.DEBUG)
-```
-
-Logging configuration, handlers, and output destinations remain the
-responsibility of the consuming application or CLI.
-
----
-
-### Dataset catalog
-
-Catalog operations return a common `DatasetRecord` dataclass with `source`,
-`dataset_id`, optional `title`, `target_id`, `variant_type`, and `n_variants`
-fields, plus the complete source object or CSV row in `raw_metadata`.
-
-List public MaveDB score sets:
-
-```python
-from dms_parser import list_datasets
-
-records = list_datasets("mavedb", query="BRCA1", limit=10)
-```
-
-List ProteinGym substitution assays using the lightweight reference-file cache:
-
-```python
-from dms_parser import FilesystemCache, list_datasets
-
-cache = FilesystemCache("datasets/cache")
-records = list_datasets(
-    "proteingym",
-    variant_type="substitutions",
-    cache=cache,
-    limit=10,
-)
-```
-
-Retrieve one metadata record by source identifier:
-
-```python
-from dms_parser import get_dataset_metadata
-
-record = get_dataset_metadata(
-    "mavedb",
-    "urn:mavedb:00000001-a-1",
-)
-```
-
-Catalog operations retrieve metadata only. They never download score tables,
-benchmark archives, raw assays, alignments, or model predictions. Listing
-`source="all"` is intentionally unsupported because cross-source pagination
-would be ambiguous; call each source separately.
-
----
-
-### Source configuration
+Use `--only proteingym` or `--only mavedb` to select one source. Use
+`--dry-run` to validate the configuration and resolve source metadata without
+downloading score tables or writing processed datasets.
 
 The YAML example selects the logical ProteinGym resource owned by the library
 instead of repeating official URLs:
@@ -320,6 +184,8 @@ proteingym:
   dir_base: datasets/proteingym
   datasets:
     - dataset_id: BLAT_ECOLX_Jacquier_2013
+      build_kwargs:
+        drop_failed: true
 
 mavedb:
   dir_base: datasets/mavedb
@@ -336,14 +202,15 @@ currently processable; selecting another registered resource for processing
 raises a clear error before downloading. ProteinGym uses its canonical
 `DMS_id` as `dataset_id`. MaveDB uses the score-set URN.
 
-Gene or target searches are discovery operations and may return multiple
-MaveDB score sets. They are not reproducible download identities. Advanced
-Python callers may still override catalog or download endpoints for mirrors
-and tests where those APIs support overrides.
+Source-level `default_build_kwargs` apply to every dataset. A dataset's own
+`build_kwargs` are deep-merged over those defaults. Score transformations are
+opt-in. `drop_failed: false` retains unsupported and error rows for
+traceability; `true` saves only rows whose status is `OK`.
 
-Score transformations remain opt-in. The YAML runner's `drop_failed` option
-controls traceability: `false` retains unsupported and error rows, while
-`true` saves only rows whose status is `OK`.
+Processed CSV files are written under each source's
+`<dir_base>/processed/` directory. The configured `output.summary_dir`
+receives combined CSV and JSON summaries. One failed dataset does not abort
+the remaining batch, and any `ERROR` summary row produces exit code `1`.
 
 Configuration loading and pipeline orchestration are also available directly
 from the installed package:
@@ -351,7 +218,7 @@ from the installed package:
 ```python
 from dms_parser import load_pipeline_config, run_pipeline
 
-config = load_pipeline_config("examples/yml_parser/config.yml")
+config = load_pipeline_config("examples/pipeline.yml")
 result = run_pipeline(config)
 
 print(result.summary)
@@ -361,8 +228,7 @@ raise SystemExit(result.exit_code)
 `config.py` owns YAML loading and structural validation. `pipeline.py` owns
 ProteinGym and MaveDB orchestration, dataset output, and combined summaries.
 The installed `dms-parser run` command is a command-line adapter over these
-public APIs. The script under `examples/yml_parser/` remains a compatibility
-wrapper; essential implementation does not live under `examples/`.
+public APIs.
 
 ---
 
@@ -485,7 +351,7 @@ examples/01_quickstart_proteingym.ipynb
 examples/02_quickstart_mavedb_download.ipynb
 examples/03_variant_parsing_and_reconstruction.ipynb
 examples/04_transforms_and_pseudo_labels.ipynb
-examples/yml_parser/run_dms_parser.py
+examples/pipeline.yml
 ```
 
 ---
@@ -495,6 +361,7 @@ examples/yml_parser/run_dms_parser.py
 Run the full test suite:
 
 ```bash
+python -m pip install -e ".[dev]"
 python -m pytest
 ```
 

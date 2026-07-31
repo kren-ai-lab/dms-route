@@ -13,26 +13,25 @@ from dms_parser import PipelineResult
 from dms_parser.exceptions import SourceConfigurationError
 
 
-def test_root_help_exits_successfully(
+@pytest.mark.parametrize(
+    ("arguments", "expected_text"),
+    [
+        (["--help"], ("run",)),
+        (["run", "--help"], ("--config", "--dry-run")),
+    ],
+    ids=("root", "run"),
+)
+def test_help_exits_successfully(
+    arguments: list[str],
+    expected_text: tuple[str, ...],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        cli_module.main(["--help"])
-
-    assert exc_info.value.code == 0
-    assert "run" in capsys.readouterr().out
-
-
-def test_run_help_exits_successfully(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        cli_module.main(["run", "--help"])
+        cli_module.main(arguments)
 
     assert exc_info.value.code == 0
     output = capsys.readouterr().out
-    assert "--config" in output
-    assert "--dry-run" in output
+    assert all(text in output for text in expected_text)
 
 
 @pytest.mark.parametrize(

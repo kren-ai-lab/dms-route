@@ -38,17 +38,13 @@ def download_proteingym_dataset(
     uncached downloads.
     """
     logger.info(
-        "Starting source download source=proteingym dataset_id=%s "
-        "cache_enabled=%s",
-        dataset_id,
-        cache is not None,
+        "Starting source download source=proteingym dataset_id=%s cache_enabled=%s",
+        dataset_id, cache is not None,
     )
     logger.debug(
         "Source download options source=proteingym dataset_id=%s overwrite=%s "
         "refresh=%s",
-        dataset_id,
-        overwrite,
-        refresh,
+        dataset_id, overwrite, refresh,
     )
     if cache is not None:
         if dataset_id is None:
@@ -66,15 +62,8 @@ def download_proteingym_dataset(
             cache=cache,
             refresh=refresh,
         )
-        logger.info(
-            "Completed source download source=proteingym dataset_id=%s",
-            dataset_id,
-        )
-        logger.debug(
-            "Resolved source artifact source=proteingym dataset_id=%s path=%s",
-            dataset_id,
-            path,
-        )
+        logger.info("Completed source download source=proteingym dataset_id=%s", dataset_id)
+        logger.debug("Resolved source artifact source=proteingym dataset_id=%s path=%s", dataset_id, path)
         return path
 
     if refresh:
@@ -88,16 +77,9 @@ def download_proteingym_dataset(
         filename = infer_filename_from_url(url, default_name="proteingym_dataset.csv")
 
     output_path = output_dir / filename
-    logger.debug(
-        "Resolved source output source=proteingym dataset_id=%s path=%s",
-        dataset_id,
-        output_path,
-    )
+    logger.debug("Resolved source output source=proteingym dataset_id=%s path=%s", dataset_id, output_path)
     path = download_file(url, output_path, overwrite=overwrite)
-    logger.info(
-        "Completed source download source=proteingym dataset_id=%s",
-        dataset_id,
-    )
+    logger.info("Completed source download source=proteingym dataset_id=%s", dataset_id)
     return path
 
 

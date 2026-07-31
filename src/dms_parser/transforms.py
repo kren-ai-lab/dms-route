@@ -75,10 +75,7 @@ def add_wt_relative_score(
     logger.info(
         "Applied WT-relative transformation method=%s score_col=%s "
         "output_col=%s rows=%d",
-        method,
-        score_col,
-        output_col,
-        len(df),
+        method, score_col, output_col, len(df),
     )
 
     return df
@@ -117,9 +114,7 @@ def add_pseudo_binary_label(
     df[output_col] = labels
     logger.info(
         "Applied pseudo-binary transformation score_col=%s output_col=%s rows=%d",
-        score_col,
-        output_col,
-        len(df),
+        score_col, output_col, len(df),
     )
 
     return df
@@ -142,9 +137,7 @@ def add_zscore(
         df[resolved_output_col] = 0.0
         logger.info(
             "Applied z-score transformation score_col=%s output_col=%s rows=%d",
-            score_col,
-            resolved_output_col,
-            len(df),
+            score_col, resolved_output_col, len(df),
         )
         return df
 
@@ -154,12 +147,7 @@ def add_zscore(
         output_col = f"{score_col}_zscore"
 
     df[output_col] = z
-    logger.info(
-        "Applied z-score transformation score_col=%s output_col=%s rows=%d",
-        score_col,
-        output_col,
-        len(df),
-    )
+    logger.info("Applied z-score transformation score_col=%s output_col=%s rows=%d", score_col, output_col, len(df))
 
     return df
 
@@ -181,9 +169,7 @@ def add_minmax(
         df[resolved_output_col] = 0.0
         logger.info(
             "Applied min-max transformation score_col=%s output_col=%s rows=%d",
-            score_col,
-            resolved_output_col,
-            len(df),
+            score_col, resolved_output_col, len(df),
         )
         return df
 
@@ -193,11 +179,6 @@ def add_minmax(
         output_col = f"{score_col}_minmax"
 
     df[output_col] = scaled
-    logger.info(
-        "Applied min-max transformation score_col=%s output_col=%s rows=%d",
-        score_col,
-        output_col,
-        len(df),
-    )
+    logger.info("Applied min-max transformation score_col=%s output_col=%s rows=%d", score_col, output_col, len(df))
 
     return df

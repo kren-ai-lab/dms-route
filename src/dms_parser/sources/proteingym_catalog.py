@@ -87,10 +87,7 @@ class ProteinGymCatalog:
         logger.debug(
             "Validated catalog filters source=proteingym query_supplied=%s "
             "variant_types=%s limit=%s offset=%d",
-            query is not None,
-            selected_types,
-            limit,
-            offset,
+            query is not None, selected_types, limit, offset,
         )
 
         records = self._load_records(selected_types)
@@ -116,10 +113,7 @@ class ProteinGymCatalog:
         records = records[offset:end]
         if not records:
             logger.warning("Catalog listing returned no datasets source=proteingym")
-        logger.info(
-            "Completed catalog listing source=proteingym result_count=%d",
-            len(records),
-        )
+        logger.info("Completed catalog listing source=proteingym result_count=%d", len(records))
         return records
 
     def get_metadata(
@@ -130,15 +124,10 @@ class ProteinGymCatalog:
         """Retrieve one ProteinGym assay by its exact DMS identifier."""
         validate_dataset_id(dataset_id)
         selected_types = _validate_variant_type(variant_type)
-        logger.info(
-            "Retrieving dataset metadata source=proteingym dataset_id=%s",
-            dataset_id,
-        )
+        logger.info("Retrieving dataset metadata source=proteingym dataset_id=%s", dataset_id)
         logger.debug(
-            "Validated metadata filter source=proteingym dataset_id=%s "
-            "variant_types=%s",
-            dataset_id,
-            selected_types,
+            "Validated metadata filter source=proteingym dataset_id=%s variant_types=%s",
+            dataset_id, selected_types,
         )
         matches = [
             record
@@ -154,10 +143,7 @@ class ProteinGymCatalog:
                 f"ProteinGym dataset {dataset_id!r} is ambiguous; specify "
                 "variant_type."
             )
-        logger.info(
-            "Completed metadata retrieval source=proteingym dataset_id=%s",
-            dataset_id,
-        )
+        logger.info("Completed metadata retrieval source=proteingym dataset_id=%s", dataset_id)
         return matches[0]
 
     def _load_records(
@@ -168,12 +154,7 @@ class ProteinGymCatalog:
         records: list[DatasetRecord] = []
         for variant_type in variant_types:
             path = self._resolve_reference_path(variant_type)
-            logger.debug(
-                "Loading ProteinGym reference source=proteingym "
-                "variant_type=%s path=%s",
-                variant_type,
-                path,
-            )
+            logger.debug("Loading ProteinGym reference source=proteingym variant_type=%s path=%s", variant_type, path)
             frame = pd.read_csv(path)
             if "DMS_id" not in frame.columns:
                 raise CatalogError(
@@ -196,10 +177,8 @@ class ProteinGymCatalog:
                     f"{local_path}"
                 )
             logger.debug(
-                "Resolved local catalog reference source=proteingym "
-                "variant_type=%s path=%s",
-                variant_type,
-                local_path,
+                "Resolved local catalog reference source=proteingym variant_type=%s path=%s",
+                variant_type, local_path,
             )
             return local_path
 
@@ -214,10 +193,8 @@ class ProteinGymCatalog:
             else PROTEINGYM_INDELS_CACHE_ID
         )
         logger.debug(
-            "Resolved catalog cache identity source=proteingym "
-            "variant_type=%s dataset_id=%s",
-            variant_type,
-            cache_id,
+            "Resolved catalog cache identity source=proteingym variant_type=%s dataset_id=%s",
+            variant_type, cache_id,
         )
         return fetch_to_cache(
             self.urls[variant_type],

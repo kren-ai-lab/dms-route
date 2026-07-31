@@ -28,56 +28,28 @@ def test_compute_wt_score_no_wt_raises(simple_variant_df: pd.DataFrame):
         compute_wt_score(df, score_col="score_raw")
 
 
-def test_add_wt_relative_score_ratio(simple_variant_df: pd.DataFrame):
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        ("ratio", [1.0, 0.8, 1.2, 0.1]),
+        ("log_ratio", [0.0, np.log(0.8), np.log(1.2), np.log(0.1)]),
+        ("log2_ratio", [0.0, np.log2(0.8), np.log2(1.2), np.log2(0.1)]),
+        ("difference", [0.0, -0.2, 0.2, -0.9]),
+    ],
+)
+def test_add_wt_relative_score_methods(
+    method: str,
+    expected: list[float],
+    simple_variant_df: pd.DataFrame,
+):
     result = add_wt_relative_score(
         simple_variant_df,
         score_col="score_raw",
-        method="ratio",
+        method=method,
         output_col="rel",
     )
 
-    assert np.isclose(result.loc[0, "rel"], 1.0)
-    assert np.isclose(result.loc[1, "rel"], 0.8)
-    assert np.isclose(result.loc[2, "rel"], 1.2)
-
-
-def test_add_wt_relative_score_log_ratio(simple_variant_df: pd.DataFrame):
-    result = add_wt_relative_score(
-        simple_variant_df,
-        score_col="score_raw",
-        method="log_ratio",
-        output_col="rel",
-    )
-
-    assert np.isclose(result.loc[0, "rel"], 0.0)
-    assert result.loc[1, "rel"] < 0
-    assert result.loc[2, "rel"] > 0
-
-
-def test_add_wt_relative_score_log2_ratio(simple_variant_df: pd.DataFrame):
-    result = add_wt_relative_score(
-        simple_variant_df,
-        score_col="score_raw",
-        method="log2_ratio",
-        output_col="rel",
-    )
-
-    assert np.isclose(result.loc[0, "rel"], 0.0)
-    assert result.loc[1, "rel"] < 0
-    assert result.loc[2, "rel"] > 0
-
-
-def test_add_wt_relative_score_difference(simple_variant_df: pd.DataFrame):
-    result = add_wt_relative_score(
-        simple_variant_df,
-        score_col="score_raw",
-        method="difference",
-        output_col="rel",
-    )
-
-    assert np.isclose(result.loc[0, "rel"], 0.0)
-    assert np.isclose(result.loc[1, "rel"], -0.2)
-    assert np.isclose(result.loc[2, "rel"], 0.2)
+    np.testing.assert_allclose(result["rel"], expected)
 
 
 def test_add_wt_relative_score_invalid_method_raises(simple_variant_df: pd.DataFrame):

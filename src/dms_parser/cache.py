@@ -182,26 +182,17 @@ class FilesystemCache:
         logger.debug(
             "Resolving cache entry source=%s dataset_id=%s path=%s "
             "validate_checksum=%s",
-            source,
-            dataset_id,
-            entry_path,
-            validate_checksum,
+            source, dataset_id, entry_path, validate_checksum,
         )
         if refresh:
-            logger.debug(
-                "Skipping cache lookup for explicit refresh source=%s dataset_id=%s",
-                source,
-                dataset_id,
-            )
+            logger.debug("Skipping cache lookup for explicit refresh source=%s dataset_id=%s", source, dataset_id)
             return None
 
         manifest_path = entry_path / _MANIFEST_FILENAME
         if not manifest_path.exists():
             logger.debug(
                 "Cache miss reason=manifest_missing source=%s dataset_id=%s path=%s",
-                source,
-                dataset_id,
-                manifest_path,
+                source, dataset_id, manifest_path,
             )
             return None
 
@@ -230,11 +221,7 @@ class FilesystemCache:
         logger.debug(
             "Validated cache entry source=%s dataset_id=%s path=%s "
             "size=%d checksum=%s",
-            source,
-            dataset_id,
-            artifact_path,
-            manifest.file_size,
-            manifest.sha256,
+            source, dataset_id, artifact_path, manifest.file_size, manifest.sha256,
         )
         return artifact_path
 
@@ -254,12 +241,7 @@ class FilesystemCache:
             raise CorruptCacheManifestError(
                 "Cache manifest key does not match its filesystem location."
             )
-        logger.debug(
-            "Validated cache manifest source=%s dataset_id=%s path=%s",
-            source,
-            dataset_id,
-            manifest_path,
-        )
+        logger.debug("Validated cache manifest source=%s dataset_id=%s path=%s", source, dataset_id, manifest_path)
         return manifest
 
     def store_file(
@@ -336,12 +318,7 @@ class FilesystemCache:
             if not refresh:
                 cached_path = self.resolve(source, dataset_id)
                 if cached_path is not None:
-                    logger.info(
-                        "Cache publication reused existing entry source=%s "
-                        "dataset_id=%s",
-                        source,
-                        dataset_id,
-                    )
+                    logger.info("Cache publication reused existing entry source=%s dataset_id=%s", source, dataset_id)
                     return cached_path
 
             entry_path = self.entry_path(source, dataset_id)
@@ -395,19 +372,11 @@ class FilesystemCache:
             )
             self._write_manifest(entry_path / _MANIFEST_FILENAME, manifest)
             candidate_published = False
-            logger.info(
-                "Published cache artifact source=%s dataset_id=%s size=%d",
-                source,
-                dataset_id,
-                size,
-            )
+            logger.info("Published cache artifact source=%s dataset_id=%s size=%d", source, dataset_id, size)
             logger.debug(
                 "Cache publication details source=%s dataset_id=%s path=%s "
                 "checksum=%s",
-                source,
-                dataset_id,
-                candidate_path,
-                manifest.sha256,
+                source, dataset_id, candidate_path, manifest.sha256,
             )
 
             if (
@@ -442,11 +411,7 @@ class FilesystemCache:
         try:
             manifest = self.load_manifest(source, dataset_id)
         except CorruptCacheManifestError:
-            logger.warning(
-                "Ignoring invalid previous cache manifest source=%s dataset_id=%s",
-                source,
-                dataset_id,
-            )
+            logger.warning("Ignoring invalid previous cache manifest source=%s dataset_id=%s", source, dataset_id)
             return None
         return manifest_path.parent / manifest.artifact_filename
 

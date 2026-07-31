@@ -1,12 +1,10 @@
-# config.yml
-# ----------
+# pipeline.yml
+# ------------
 # Configuration for `dms-parser run`.
-# `run_dms_parser.py` remains a compatibility/example wrapper.
 #
-# Add/remove datasets or tweak build_kwargs here — no need to touch the
-# Python script. `default_build_kwargs` applies to every dataset in that
-# source; give any individual dataset entry its own `build_kwargs` block to
-# override just the keys you need for that one (deep-merged over defaults).
+# Add or remove datasets and adjust build_kwargs here. `default_build_kwargs`
+# applies to every dataset in a source; an individual dataset can provide its
+# own `build_kwargs` mapping to override selected defaults.
 
 proteingym:
   resource: dms_substitutions

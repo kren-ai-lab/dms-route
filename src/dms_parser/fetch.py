@@ -28,55 +28,27 @@ def fetch_to_cache(
     or network request is created. A miss is downloaded into an isolated
     temporary directory, then published through the cache's crash-safe store.
     """
-    logger.info(
-        "Starting fetch source=%s dataset_id=%s",
-        source,
-        dataset_id,
-    )
+    logger.info("Starting fetch source=%s dataset_id=%s", source, dataset_id)
     if refresh:
-        logger.info(
-            "Explicit cache refresh requested source=%s dataset_id=%s",
-            source,
-            dataset_id,
-        )
+        logger.info("Explicit cache refresh requested source=%s dataset_id=%s", source, dataset_id)
     cached_path = cache.resolve(
         source,
         dataset_id,
         refresh=refresh,
     )
     if cached_path is not None:
-        logger.info(
-            "Cache hit source=%s dataset_id=%s",
-            source,
-            dataset_id,
-        )
-        logger.debug(
-            "Resolved cached artifact source=%s dataset_id=%s path=%s",
-            source,
-            dataset_id,
-            cached_path,
-        )
+        logger.info("Cache hit source=%s dataset_id=%s", source, dataset_id)
+        logger.debug("Resolved cached artifact source=%s dataset_id=%s path=%s", source, dataset_id, cached_path)
         return cached_path
 
-    logger.info(
-        "Cache miss source=%s dataset_id=%s",
-        source,
-        dataset_id,
-    )
+    logger.info("Cache miss source=%s dataset_id=%s", source, dataset_id)
     logger.debug(
         "Cache identity source=%s dataset_id=%s path=%s",
-        source,
-        dataset_id,
-        cache.entry_path(source, dataset_id),
+        source, dataset_id, cache.entry_path(source, dataset_id),
     )
     with TemporaryDirectory(prefix="dms-parser-fetch-") as staging_directory:
         staging_path = Path(staging_directory) / "artifact.download"
-        logger.debug(
-            "Created fetch staging path source=%s dataset_id=%s path=%s",
-            source,
-            dataset_id,
-            staging_path,
-        )
+        logger.debug("Created fetch staging path source=%s dataset_id=%s path=%s", source, dataset_id, staging_path)
         download_file(
             url,
             staging_path,
@@ -90,15 +62,6 @@ def fetch_to_cache(
             staging_path,
             refresh=refresh,
         )
-        logger.info(
-            "Completed cache publication source=%s dataset_id=%s",
-            source,
-            dataset_id,
-        )
-        logger.debug(
-            "Published cached artifact source=%s dataset_id=%s path=%s",
-            source,
-            dataset_id,
-            cached_path,
-        )
+        logger.info("Completed cache publication source=%s dataset_id=%s", source, dataset_id)
+        logger.debug("Published cached artifact source=%s dataset_id=%s path=%s", source, dataset_id, cached_path)
         return cached_path

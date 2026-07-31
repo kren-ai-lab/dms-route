@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import importlib.util
 import logging
 from pathlib import Path
 
@@ -20,10 +19,6 @@ from dms_parser import (
     fetch_to_cache,
 )
 from dms_parser.exceptions import DownloadError
-
-RUNNER_PATH = (
-    Path(__file__).parents[1] / "examples" / "yml_parser" / "run_dms_parser.py"
-)
 
 
 class JsonResponse:
@@ -291,74 +286,3 @@ def test_download_exception_type_and_message_are_unchanged(
         "Failed to download file from 'https://example.test/data.csv': offline"
     )
     assert exc_info.value.__cause__ is cause
-
-
-def test_example_runner_injects_run_and_forwards_arguments(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    spec = importlib.util.spec_from_file_location("logging_runner", RUNNER_PATH)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Could not load the YAML example runner.")
-    runner = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(runner)
-    calls: list[list[str]] = []
-
-    def record_cli(arguments: list[str]) -> int:
-        calls.append(arguments)
-        return 7
-
-    monkeypatch.setattr(runner, "cli_main", record_cli)
-    arguments = [
-        "--config",
-        "config.yml",
-        "--log-level",
-        "DEBUG",
-        "--only",
-        "mavedb",
-        "--dry-run",
-    ]
-
-    assert runner.main(arguments) == 7
-    assert calls == [["run", *arguments]]
-
-
-def test_example_runner_contains_no_independent_cli_or_orchestration() -> None:
-    source = RUNNER_PATH.read_text(encoding="utf-8")
-
-    for forbidden_name in (
-        "argparse",
-        "basicConfig",
-        "load_pipeline_config",
-        "run_pipeline",
-        "process_proteingym",
-        "process_mavedb",
-    ):
-        assert forbidden_name not in source
-
-
-def test_example_runner_uses_process_arguments_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    spec = importlib.util.spec_from_file_location(
-        "default_arguments_runner",
-        RUNNER_PATH,
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Could not load the YAML example runner.")
-    runner = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(runner)
-    calls: list[list[str]] = []
-
-    def record_cli(arguments: list[str]) -> int:
-        calls.append(arguments)
-        return 0
-
-    monkeypatch.setattr(runner, "cli_main", record_cli)
-    monkeypatch.setattr(
-        runner.sys,
-        "argv",
-        ["run_dms_parser.py", "--config", "config.yml"],
-    )
-
-    assert runner.main() == 0
-    assert calls == [["run", "--config", "config.yml"]]

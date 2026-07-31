@@ -60,18 +60,14 @@ class MaveDBCatalog:
         logger.debug(
             "Validated catalog filters source=mavedb query_supplied=%s "
             "limit=%d offset=%d",
-            query is not None,
-            limit,
-            offset,
+            query is not None, limit, offset,
         )
 
         payload: dict[str, Any] = {"limit": limit, "offset": offset}
         if query is not None:
             payload["text"] = query
 
-        logger.debug(
-            "Requesting catalog endpoint source=mavedb endpoint=/score-sets/search"
-        )
+        logger.debug("Requesting catalog endpoint source=mavedb endpoint=/score-sets/search")
         response = self.session.post(
             f"{self.base_url}/score-sets/search",
             json=payload,
@@ -85,34 +81,22 @@ class MaveDBCatalog:
         records = sorted(records, key=lambda record: record.dataset_id)
         if not records:
             logger.warning("Catalog listing returned no datasets source=mavedb")
-        logger.info(
-            "Completed catalog listing source=mavedb result_count=%d",
-            len(records),
-        )
+        logger.info("Completed catalog listing source=mavedb result_count=%d", len(records))
         return records
 
     def get_metadata(self, dataset_id: str) -> DatasetRecord:
         """Retrieve one public MaveDB score-set metadata object."""
         validate_dataset_id(dataset_id)
-        logger.info(
-            "Retrieving dataset metadata source=mavedb dataset_id=%s",
-            dataset_id,
-        )
+        logger.info("Retrieving dataset metadata source=mavedb dataset_id=%s", dataset_id)
         encoded_id = quote(dataset_id, safe=":")
-        logger.debug(
-            "Requesting metadata endpoint source=mavedb "
-            "endpoint=/score-sets/<dataset_id>"
-        )
+        logger.debug("Requesting metadata endpoint source=mavedb endpoint=/score-sets/<dataset_id>")
         response = self.session.get(
             f"{self.base_url}/score-sets/{encoded_id}",
             timeout=self.timeout,
         )
         response.raise_for_status()
         record = _mavedb_record(response.json())
-        logger.info(
-            "Completed metadata retrieval source=mavedb dataset_id=%s",
-            dataset_id,
-        )
+        logger.info("Completed metadata retrieval source=mavedb dataset_id=%s", dataset_id)
         return record
 
 

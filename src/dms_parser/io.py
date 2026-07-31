@@ -40,9 +40,7 @@ def download_file(
     logger.info("Starting download destination=%s", output_path)
     logger.debug(
         "Requesting download endpoint=%s timeout=%s chunk_size=%s",
-        _sanitize_url_for_logging(url),
-        timeout,
-        chunk_size,
+        _sanitize_url_for_logging(url), timeout, chunk_size,
     )
     temporary_path: Path | None = None
     failure: requests.RequestException | OSError | None = None
@@ -79,11 +77,7 @@ def download_file(
         ) from failure
 
     logger.info("Completed download destination=%s", output_path)
-    logger.debug(
-        "Downloaded bytes=%d destination=%s",
-        downloaded_bytes,
-        output_path,
-    )
+    logger.debug("Downloaded bytes=%d destination=%s", downloaded_bytes, output_path)
     return output_path
 
 
@@ -174,12 +168,7 @@ def write_table(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     suffix = path.suffix.lower()
-    logger.debug(
-        "Resolved table output path=%s suffix=%s rows=%d",
-        path,
-        suffix or "<none>",
-        len(df),
-    )
+    logger.debug("Resolved table output path=%s suffix=%s rows=%d", path, suffix or "<none>", len(df))
 
     try:
         if suffix == ".parquet":
