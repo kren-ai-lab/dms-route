@@ -2,6 +2,9 @@
 
 > A lightweight and modular Python library for downloading, parsing, standardizing, and transforming Deep Mutational Scanning (DMS) datasets from ProteinGym and MaveDB.
 
+`dms-parser` works with already-published DMS datasets; it does not run DMS
+experiments or train predictive models.
+
 ---
 
 ## 🧠 Motivation
@@ -47,7 +50,7 @@ It is a **clean data + representation layer**.
 
 ### ✅ Dataset ingestion
 
-* ProteinGym (CSV / parquet)
+* ProteinGym substitution assays (CSV / parquet)
 * MaveDB (API-based download)
 
 ### ✅ Variant parsing
@@ -128,7 +131,8 @@ dms-parser run \
     --only proteingym
 ```
 
-Resolve metadata without downloading or processing score datasets:
+Validate the configuration and resolve source metadata without downloading or
+processing score datasets:
 
 ```bash
 dms-parser run \
@@ -322,6 +326,9 @@ mavedb:
   datasets:
     - dataset_id: "urn:mavedb:00000001-a-4"
 ```
+
+Each source section can list multiple `dataset_id` entries, which are processed
+independently in one pipeline run.
 
 ProteinGym registers `dms_substitutions`, `dms_indels`,
 `clinical_substitutions`, and `clinical_indels`. Only `dms_substitutions` is

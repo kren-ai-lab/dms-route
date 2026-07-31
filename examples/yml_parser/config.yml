@@ -1,6 +1,7 @@
 # config.yml
 # ----------
-# Configuration for run_dms_parser.py
+# Configuration for `dms-parser run`.
+# `run_dms_parser.py` remains a compatibility/example wrapper.
 #
 # Add/remove datasets or tweak build_kwargs here — no need to touch the
 # Python script. `default_build_kwargs` applies to every dataset in that

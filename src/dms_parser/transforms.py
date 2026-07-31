@@ -25,7 +25,7 @@ def compute_wt_score(
         raise MissingWildTypeError("No wild-type row found in dataset.")
 
     if len(wt_rows) > 1:
-        # Promedio si hay múltiples WT (caso raro pero posible)
+        # Average multiple WT measurements when a dataset provides them.
         return wt_rows[score_col].mean()
 
     return wt_rows[score_col].iloc[0]
