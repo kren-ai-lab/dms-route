@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import inspect
 from pathlib import Path
 from typing import Any
@@ -9,6 +8,7 @@ import pandas as pd
 import pytest
 import yaml
 
+import dms_parser.pipeline as pipeline_module
 from dms_parser import (
     PROTEINGYM_RESOURCES,
     SourceConfigurationError,
@@ -16,6 +16,8 @@ from dms_parser import (
     UnsupportedSourceResourceError,
     get_proteingym_resource,
     list_proteingym_resources,
+    run_pipeline,
+    validate_pipeline_config,
 )
 from dms_parser.sources.mavedb_catalog import MAVEDB_API_URL, MaveDBCatalog
 from dms_parser.sources.proteingym_catalog import (
@@ -24,9 +26,6 @@ from dms_parser.sources.proteingym_catalog import (
     ProteinGymCatalog,
 )
 
-RUNNER_PATH = (
-    Path(__file__).parents[1] / "examples" / "yml_parser" / "run_dms_parser.py"
-)
 CONFIG_PATH = Path(__file__).parents[1] / "examples" / "yml_parser" / "config.yml"
 
 VALID_MAVEDB_SCORE_SET_URNS = (
@@ -114,18 +113,6 @@ EXPECTED_RESOURCES = {
     },
 }
 
-
-@pytest.fixture
-def runner():
-    """Load the YAML example runner as a test module."""
-    spec = importlib.util.spec_from_file_location("source_config_runner", RUNNER_PATH)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Could not load the example DMS runner.")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_registry_contains_exact_official_resources() -> None:
     resources = list_proteingym_resources()
 
@@ -190,16 +177,15 @@ def test_unknown_and_unsupported_resources_are_distinct() -> None:
 def test_unsupported_resource_fails_before_io(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    runner,
 ) -> None:
     source_root = tmp_path / "proteingym"
 
     def forbidden(*args: object, **kwargs: object) -> None:
         raise AssertionError("Unsupported resource attempted I/O.")
 
-    monkeypatch.setattr(runner, "download_file", forbidden)
+    monkeypatch.setattr(pipeline_module, "download_file", forbidden)
     with pytest.raises(UnsupportedSourceResourceError):
-        runner.process_proteingym(
+        pipeline_module.process_proteingym(
             {
                 "resource": "dms_indels",
                 "dir_base": source_root,
@@ -275,6 +261,11 @@ def test_yaml_uses_logical_source_contract() -> None:
         (
             "proteingym",
             {
+                "proteingym": {
+                    "resource": "dms_substitutions",
+                    "dir_base": "unused",
+                    "datasets": [{"dataset_id": "ASSAY_1"}],
+                },
                 "mavedb": {
                     "dir_base": "unused",
                     "datasets": [
@@ -282,7 +273,7 @@ def test_yaml_uses_logical_source_contract() -> None:
                     ],
                 }
             },
-            [],
+            ["proteingym"],
         ),
     ],
 )
@@ -292,34 +283,31 @@ def test_source_presence_and_only_control_execution(
     expected: list[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    runner,
 ) -> None:
     calls: list[str] = []
 
-    monkeypatch.setattr(runner, "load_config", lambda path: config)
     monkeypatch.setattr(
-        runner,
+        pipeline_module,
         "process_proteingym",
-        lambda cfg, dry_run=False: calls.append("proteingym") or [],
+        lambda cfg, dry_run=False: calls.append("proteingym")
+        or [{"source": "proteingym", "input": "p", "status": "DRY_RUN"}],
     )
     monkeypatch.setattr(
-        runner,
+        pipeline_module,
         "process_mavedb",
-        lambda cfg, dry_run=False: calls.append("mavedb") or [],
+        lambda cfg, dry_run=False: calls.append("mavedb")
+        or [{"source": "mavedb", "input": "m", "status": "DRY_RUN"}],
     )
-    monkeypatch.setattr(runner, "print_report", lambda summary: None)
-    monkeypatch.setattr(runner.logging, "basicConfig", lambda **kwargs: None)
-
-    result = runner.main(
-        [
-            "--config",
-            str(tmp_path / "config.yml"),
-            "--only",
-            only,
-        ]
+    monkeypatch.setattr(
+        pipeline_module,
+        "write_summary",
+        lambda summary, output: tmp_path / "summary.csv",
     )
+    monkeypatch.setattr(pipeline_module, "log_summary", lambda summary: None)
 
-    assert result == 0
+    result = run_pipeline(config, only=only)
+
+    assert result.exit_code == 0
     assert calls == expected
 
 
@@ -420,27 +408,21 @@ def test_invalid_configuration_fails_clearly(
     source: str,
     config: dict[str, Any],
     message: str,
-    runner,
 ) -> None:
-    validator = (
-        runner.validate_proteingym_config
-        if source == "proteingym"
-        else runner.validate_mavedb_config
-    )
-
     with pytest.raises(SourceConfigurationError, match=message):
-        validator(config)
+        validate_pipeline_config({source: config})
 
 
 @pytest.mark.parametrize("dataset_id", VALID_MAVEDB_SCORE_SET_URNS)
 def test_mavedb_accepts_complete_permanent_score_set_urns(
     dataset_id: str,
-    runner,
 ) -> None:
-    runner.validate_mavedb_config(
+    validate_pipeline_config(
         {
-            "dir_base": "unused",
-            "datasets": [{"dataset_id": dataset_id}],
+            "mavedb": {
+                "dir_base": "unused",
+                "datasets": [{"dataset_id": dataset_id}],
+            }
         }
     )
 
@@ -450,21 +432,20 @@ def test_invalid_mavedb_identifiers_fail_before_io(
     dataset_id: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    runner,
 ) -> None:
     source_root = tmp_path / "mavedb"
 
     def forbidden(*args: object, **kwargs: object) -> None:
         raise AssertionError("Invalid MaveDB identifier attempted I/O.")
 
-    monkeypatch.setattr(runner, "ensure_dirs", forbidden)
-    monkeypatch.setattr(runner.requests, "get", forbidden)
+    monkeypatch.setattr(pipeline_module, "_ensure_dirs", forbidden)
+    monkeypatch.setattr(pipeline_module.requests, "get", forbidden)
 
     with pytest.raises(
         SourceConfigurationError,
         match="complete permanent score-set URN",
     ):
-        runner.process_mavedb(
+        pipeline_module.process_mavedb(
             {
                 "dir_base": source_root,
                 "datasets": [{"dataset_id": dataset_id}],
@@ -511,7 +492,6 @@ def test_mavedb_gene_and_display_fallback_are_separate(
     expected_uniprot: str | None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    runner,
 ) -> None:
     dataset_id = "urn:mavedb:00000055-aa-2"
     builder_calls: list[dict[str, Any]] = []
@@ -538,10 +518,14 @@ def test_mavedb_gene_and_display_fallback_are_separate(
         builder_calls.append(kwargs)
         return pd.DataFrame({"status": ["OK"]})
 
-    monkeypatch.setattr(runner.requests, "get", source_request)
-    monkeypatch.setattr(runner, "build_mavedb_dataset", build_dataset)
+    monkeypatch.setattr(pipeline_module.requests, "get", source_request)
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_mavedb_dataset",
+        build_dataset,
+    )
 
-    result = runner.process_mavedb(
+    result = pipeline_module.process_mavedb(
         {
             "dir_base": tmp_path / "mavedb",
             "datasets": [{"dataset_id": dataset_id}],
@@ -560,7 +544,6 @@ def test_drop_failed_controls_saved_rows_and_transform_defaults(
     drop_failed: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    runner,
 ) -> None:
     source_root = tmp_path / str(drop_failed).lower()
     metadata = pd.DataFrame(
@@ -580,12 +563,12 @@ def test_drop_failed_controls_saved_rows_and_transform_defaults(
     )
 
     monkeypatch.setattr(
-        runner,
+        pipeline_module,
         "download_file",
         lambda url, output_path, overwrite=False: Path(output_path),
     )
     monkeypatch.setattr(
-        runner,
+        pipeline_module,
         "read_table",
         lambda path: (
             metadata
@@ -594,7 +577,7 @@ def test_drop_failed_controls_saved_rows_and_transform_defaults(
         ),
     )
 
-    summary = runner.process_proteingym(
+    summary = pipeline_module.process_proteingym(
         {
             "resource": "dms_substitutions",
             "dir_base": source_root,

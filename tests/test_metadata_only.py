@@ -1,46 +1,26 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
-import types
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 import dms_parser.fetch as fetch_module
+import dms_parser.pipeline as pipeline_module
 import dms_parser.sources.mavedb as mavedb_module
 import dms_parser.sources.proteingym as proteingym_module
-
-RUNNER_PATH = (
-    Path(__file__).parents[1] / "examples" / "yml_parser" / "run_dms_parser.py"
-)
+from dms_parser import get_proteingym_resource
 
 
-@pytest.fixture
-def runner(monkeypatch):
-    """Load the example runner without requiring PyYAML in package tests."""
-    yaml_stub = types.ModuleType("yaml")
-    yaml_stub.safe_load = lambda handle: {}
-    monkeypatch.setitem(sys.modules, "yaml", yaml_stub)
-
-    spec = importlib.util.spec_from_file_location("test_dms_runner", RUNNER_PATH)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Could not load the example DMS runner.")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _forbid_skipped_operations(monkeypatch, runner) -> None:
+def _forbid_skipped_operations(monkeypatch) -> None:
     """Make every dataset acquisition and row-processing operation fail."""
 
     def forbidden(*args, **kwargs):
         raise AssertionError("Metadata-only execution invoked a skipped operation.")
 
-    monkeypatch.setattr(runner, "build_mavedb_dataset", forbidden)
-    monkeypatch.setattr(runner, "build_proteingym_dataset", forbidden)
-    monkeypatch.setattr(runner, "write_table", forbidden)
+    monkeypatch.setattr(pipeline_module, "build_mavedb_dataset", forbidden)
+    monkeypatch.setattr(pipeline_module, "build_proteingym_dataset", forbidden)
+    monkeypatch.setattr(pipeline_module, "write_table", forbidden)
     monkeypatch.setattr(fetch_module, "fetch_to_cache", forbidden)
     monkeypatch.setattr(mavedb_module, "download_mavedb_dataset", forbidden)
     monkeypatch.setattr(mavedb_module, "load_mavedb_from_url", forbidden)
@@ -74,9 +54,8 @@ class MetadataResponse:
 def test_mavedb_metadata_only_skips_dataset_acquisition(
     tmp_path,
     monkeypatch,
-    runner,
 ):
-    _forbid_skipped_operations(monkeypatch, runner)
+    _forbid_skipped_operations(monkeypatch)
     base_url = "https://api.example.test"
     urn = "urn:mavedb:00000001-a-1"
     source_root = tmp_path / "mavedb"
@@ -93,16 +72,16 @@ def test_mavedb_metadata_only_skips_dataset_acquisition(
             raise AssertionError("Metadata-only mode requested MaveDB scores.")
         return MetadataResponse(metadata)
 
-    monkeypatch.setattr(runner.requests, "get", metadata_only_request)
+    monkeypatch.setattr(pipeline_module.requests, "get", metadata_only_request)
     monkeypatch.setattr(
-        runner.pd,
+        pipeline_module.pd,
         "read_csv",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("Metadata-only mode read a score table.")
         ),
     )
 
-    result = runner.process_mavedb(
+    result = pipeline_module.process_mavedb(
         {
             "dir_base": source_root,
             "datasets": [{"dataset_id": urn}],
@@ -129,9 +108,8 @@ def test_mavedb_metadata_only_skips_dataset_acquisition(
 def test_proteingym_metadata_only_skips_benchmark_and_processing(
     tmp_path,
     monkeypatch,
-    runner,
 ):
-    _forbid_skipped_operations(monkeypatch, runner)
+    _forbid_skipped_operations(monkeypatch)
     source_root = tmp_path / "proteingym"
     source_root.mkdir()
     metadata_path = source_root / "DMS_substitutions.csv"
@@ -143,7 +121,7 @@ def test_proteingym_metadata_only_skips_benchmark_and_processing(
             "UniProt_ID": ["P12345"],
         }
     ).to_csv(metadata_path, index=False)
-    resource = runner.get_proteingym_resource("dms_substitutions")
+    resource = get_proteingym_resource("dms_substitutions")
     requested_urls: list[str] = []
 
     def metadata_download(url, output_path, *, overwrite=False):
@@ -154,9 +132,9 @@ def test_proteingym_metadata_only_skips_benchmark_and_processing(
         assert Path(output_path) == metadata_path
         return metadata_path
 
-    monkeypatch.setattr(runner, "download_file", metadata_download)
+    monkeypatch.setattr(pipeline_module, "download_file", metadata_download)
 
-    result = runner.process_proteingym(
+    result = pipeline_module.process_proteingym(
         {
             "resource": "dms_substitutions",
             "dir_base": source_root,
@@ -185,7 +163,6 @@ def test_proteingym_metadata_only_skips_benchmark_and_processing(
 def test_normal_mavedb_execution_keeps_existing_acquisition_path(
     tmp_path,
     monkeypatch,
-    runner,
 ):
     source_root = tmp_path / "mavedb"
     base_url = "https://api.example.test"
@@ -227,10 +204,14 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
         builder_calls.append(kwargs)
         return pd.DataFrame({"status": ["OK"]})
 
-    monkeypatch.setattr(runner.requests, "get", source_request)
-    monkeypatch.setattr(runner, "build_mavedb_dataset", build_dataset)
+    monkeypatch.setattr(pipeline_module.requests, "get", source_request)
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_mavedb_dataset",
+        build_dataset,
+    )
 
-    result = runner.process_mavedb(
+    result = pipeline_module.process_mavedb(
         {
             "dir_base": source_root,
             "datasets": [{"dataset_id": urn}],
@@ -259,7 +240,6 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
 def test_normal_mavedb_rejects_failed_scores_response(
     tmp_path,
     monkeypatch,
-    runner,
 ):
     source_root = tmp_path / "mavedb"
     base_url = "https://api.example.test"
@@ -272,7 +252,7 @@ def test_normal_mavedb_rejects_failed_scores_response(
 
         def raise_for_status(self) -> None:
             """Raise the HTTP failure returned by the score endpoint."""
-            raise runner.requests.HTTPError("503 Server Error")
+            raise pipeline_module.requests.HTTPError("503 Server Error")
 
     def source_request(url: str, *, timeout: int):
         assert timeout == 60
@@ -291,10 +271,14 @@ def test_normal_mavedb_rejects_failed_scores_response(
         builder_called = True
         raise AssertionError("A failed score response must not reach the builder.")
 
-    monkeypatch.setattr(runner.requests, "get", source_request)
-    monkeypatch.setattr(runner, "build_mavedb_dataset", unexpected_builder)
+    monkeypatch.setattr(pipeline_module.requests, "get", source_request)
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_mavedb_dataset",
+        unexpected_builder,
+    )
 
-    result = runner.process_mavedb(
+    result = pipeline_module.process_mavedb(
         {
             "dir_base": source_root,
             "datasets": [{"dataset_id": urn}],
@@ -318,10 +302,9 @@ def test_normal_mavedb_rejects_failed_scores_response(
 def test_normal_proteingym_execution_keeps_existing_acquisition_path(
     tmp_path,
     monkeypatch,
-    runner,
 ):
     source_root = tmp_path / "proteingym"
-    resource = runner.get_proteingym_resource("dms_substitutions")
+    resource = get_proteingym_resource("dms_substitutions")
     downloaded_urls: list[str] = []
     builder_calls: list[dict] = []
     metadata = pd.DataFrame(
@@ -358,11 +341,15 @@ def test_normal_proteingym_execution_keeps_existing_acquisition_path(
         builder_calls.append(kwargs)
         return pd.DataFrame({"status": ["OK"]})
 
-    monkeypatch.setattr(runner, "download_file", offline_download)
-    monkeypatch.setattr(runner, "read_table", offline_read)
-    monkeypatch.setattr(runner, "build_proteingym_dataset", build_dataset)
+    monkeypatch.setattr(pipeline_module, "download_file", offline_download)
+    monkeypatch.setattr(pipeline_module, "read_table", offline_read)
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_proteingym_dataset",
+        build_dataset,
+    )
 
-    result = runner.process_proteingym(
+    result = pipeline_module.process_proteingym(
         {
             "resource": "dms_substitutions",
             "dir_base": source_root,

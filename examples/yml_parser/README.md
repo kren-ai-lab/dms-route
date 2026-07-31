@@ -3,6 +3,11 @@
 A configuration-driven script built on `dms_parser` for MaveDB and ProteinGym
 datasets.
 
+The script is intentionally a thin command-line example. The installed
+package's `dms_parser.config` module owns YAML loading and validation, while
+`dms_parser.pipeline` owns source orchestration and output generation.
+Nothing under `examples/` is required implementation for library callers.
+
 ## Usage
 
 ```bash
@@ -11,6 +16,18 @@ pip install -r examples/yml_parser/requirements.txt
 python examples/yml_parser/run_dms_parser.py \
     --config examples/yml_parser/config.yml
 ```
+
+The same workflow can be called without `argparse`:
+
+```python
+from dms_parser import load_pipeline_config, run_pipeline
+
+config = load_pipeline_config("examples/yml_parser/config.yml")
+result = run_pipeline(config)
+```
+
+The final packaged `dms-parser` command is intentionally deferred to a later
+increment.
 
 Options:
 - `--only {all,proteingym,mavedb}` — restrict to one source (default: all)

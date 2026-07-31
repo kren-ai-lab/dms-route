@@ -81,3 +81,11 @@ class UnknownSourceResourceError(SourceConfigurationError, LookupError):
 
 class UnsupportedSourceResourceError(SourceConfigurationError):
     """Raised when a known resource cannot be processed by the current package."""
+
+
+class PipelineError(DMSParserError):
+    """Base exception for pipeline orchestration failures."""
+
+
+class InvalidPipelineOptionError(PipelineError, ValueError):
+    """Raised when a programmatic pipeline option is invalid."""

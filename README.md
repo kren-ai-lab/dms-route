@@ -291,6 +291,26 @@ Score transformations remain opt-in. The YAML runner's `drop_failed` option
 controls traceability: `false` retains unsupported and error rows, while
 `true` saves only rows whose status is `OK`.
 
+Configuration loading and pipeline orchestration are also available directly
+from the installed package:
+
+```python
+from dms_parser import load_pipeline_config, run_pipeline
+
+config = load_pipeline_config("examples/yml_parser/config.yml")
+result = run_pipeline(config)
+
+print(result.summary)
+raise SystemExit(result.exit_code)
+```
+
+`config.py` owns YAML loading and structural validation. `pipeline.py` owns
+ProteinGym and MaveDB orchestration, dataset output, and combined summaries.
+The script under `examples/yml_parser/` is a thin usage example over these
+public APIs; essential implementation does not live under `examples/`. The
+final packaged `dms-parser` command is intentionally deferred to a later
+increment.
+
 ---
 
 ## 🧬 Standardized Dataset Schema
@@ -358,7 +378,9 @@ dms_parser/
 ├── builders.py        # High-level dataset construction
 ├── cache.py           # Validated filesystem artifact cache
 ├── catalog.py         # Common metadata records and source dispatch
+├── config.py          # Pipeline YAML loading and validation
 ├── fetch.py           # Cache-aware staged downloads
+├── pipeline.py        # Configuration-driven source orchestration
 ├── parsing.py         # Variant parsing logic
 ├── transforms.py      # Score transformations
 ├── validation.py      # Dataset and sequence validation

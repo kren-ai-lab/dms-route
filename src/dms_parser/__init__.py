@@ -7,6 +7,7 @@ import logging
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
 from dms_parser.cache import CacheManifest, FilesystemCache
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
+from dms_parser.config import load_pipeline_config, validate_pipeline_config
 from dms_parser.exceptions import (
     CacheError,
     CatalogError,
@@ -19,9 +20,11 @@ from dms_parser.exceptions import (
     InvalidCatalogQueryError,
     InvalidDatasetError,
     InvalidHGVSVariantError,
+    InvalidPipelineOptionError,
     InvalidVariantError,
     MissingWildTypeError,
     MutationApplicationError,
+    PipelineError,
     SequenceValidationError,
     SourceConfigurationError,
     UnknownSourceResourceError,
@@ -61,6 +64,7 @@ from dms_parser.transforms import (
     add_zscore,
     compute_wt_score,
 )
+from dms_parser.pipeline import PipelineResult, run_pipeline
 from dms_parser.sources.mavedb_catalog import MaveDBCatalog
 from dms_parser.sources.proteingym_catalog import ProteinGymCatalog
 from dms_parser.sources.proteingym_resources import (
@@ -100,6 +104,10 @@ __all__ = [
     "list_proteingym_resources",
     "list_datasets",
     "get_dataset_metadata",
+    "load_pipeline_config",
+    "validate_pipeline_config",
+    "run_pipeline",
+    "PipelineResult",
     "FilesystemCache",
     "CacheManifest",
     "fetch_to_cache",
@@ -152,6 +160,8 @@ __all__ = [
     "SourceConfigurationError",
     "UnknownSourceResourceError",
     "UnsupportedSourceResourceError",
+    "PipelineError",
+    "InvalidPipelineOptionError",
     "InvalidDatasetError",
     "MissingWildTypeError",
     "InvalidVariantError",
