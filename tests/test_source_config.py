@@ -113,6 +113,13 @@ EXPECTED_RESOURCES = {
     },
 }
 
+
+def _mock_built_table() -> pd.DataFrame:
+    """Return the standardized columns needed by pipeline accounting."""
+    return pd.DataFrame(
+        {"status": ["OK"], "is_wildtype": [False], "is_synthetic": [False]}
+    )
+
 def test_registry_contains_exact_official_resources() -> None:
     resources = list_proteingym_resources()
 
@@ -221,9 +228,11 @@ def test_yaml_uses_logical_source_contract() -> None:
         config["proteingym"]["default_build_kwargs"]["add_binary_label"]
         is False
     )
+    assert config["proteingym"]["default_build_kwargs"]["add_wildtype_row"] is False
     assert config["proteingym"]["default_build_kwargs"]["drop_failed"] is False
     assert config["mavedb"]["default_build_kwargs"]["add_relative_score"] is False
     assert config["mavedb"]["default_build_kwargs"]["add_binary_label"] is False
+    assert config["mavedb"]["default_build_kwargs"]["add_wildtype_row"] is False
     assert config["mavedb"]["default_build_kwargs"]["drop_failed"] is False
 
 
@@ -516,7 +525,7 @@ def test_mavedb_gene_and_display_fallback_are_separate(
 
     def build_dataset(**kwargs: Any) -> pd.DataFrame:
         builder_calls.append(kwargs)
-        return pd.DataFrame({"status": ["OK"]})
+        return _mock_built_table()
 
     monkeypatch.setattr(pipeline_module.requests, "get", source_request)
     monkeypatch.setattr(

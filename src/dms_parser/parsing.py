@@ -305,6 +305,9 @@ def parse_hgvs_pro(hgvs_pro: str) -> list[MutationTuple]:
     """Parse protein HGVS strings from MaveDB."""
     hgvs_pro = str(hgvs_pro).strip()
 
+    if hgvs_pro == "p.=":
+        return []
+
     if hgvs_pro_is_indel(hgvs_pro):
         raise UnsupportedVariantError(
             "Unsupported hgvs_pro (protein-level indel/frameshift/etc.) "

@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from dms_parser.exceptions import MissingWildTypeError
 from dms_parser.io import read_table
 from dms_parser.parsing import (
     count_mutations,
@@ -140,6 +141,56 @@ def _safe_variant_to_sequence(
     return out
 
 
+def _maybe_add_wildtype_row(
+    df: pd.DataFrame,
+    *,
+    add_wildtype_row: bool,
+    wt_sequence: str,
+    dataset_id: str | None,
+    source: str,
+    protein_id: str | None,
+    gene: str | None,
+    uniprot_id: str | None,
+) -> pd.DataFrame:
+    """Prepend a scoreless synthetic WT row when one was requested and is absent."""
+    if not add_wildtype_row:
+        return df
+
+    if has_wildtype_row(df, wt_col="is_wildtype", status_col="status"):
+        logger.debug("Synthetic wild-type row not needed source=%s dataset_id=%s", source, dataset_id)
+        return df.reset_index(drop=True)
+
+    row = {
+        "dataset_id": dataset_id,
+        "source": source,
+        "protein_id": protein_id,
+        "gene": gene,
+        "uniprot_id": uniprot_id,
+        "wt_sequence": wt_sequence,
+        "variant": "",
+        "mutated_sequence": wt_sequence,
+        "is_wildtype": True,
+        "is_synthetic": True,
+        "n_mutations": 0,
+        "score_raw": float("nan"),
+        "status": "OK",
+        "error": "",
+    }
+    original_dtypes = df.dtypes
+    out = df.copy()
+    out.index = pd.RangeIndex(1, len(out) + 1)
+    out = out.reindex(pd.RangeIndex(len(out) + 1))
+    for column, value in row.items():
+        out.at[0, column] = value
+        try:
+            out[column] = out[column].astype(original_dtypes[column])
+        except (TypeError, ValueError):
+            pass
+
+    logger.info("Added synthetic wild-type row source=%s dataset_id=%s", source, dataset_id)
+    return out
+
+
 def _maybe_add_transforms(
     df: pd.DataFrame,
     *,
@@ -163,6 +214,7 @@ def _maybe_add_transforms(
             wt_col="is_wildtype",
             method=relative_method,
             output_col=relative_output_col,
+            status_col="status",
         )
 
     if add_binary_label:
@@ -199,6 +251,7 @@ def build_mavedb_dataset(
     delta: float = 0.1,
     higher_is_better: bool = True,
     binary_output_col: str = "score_binary_like",
+    add_wildtype_row: bool = False,
     drop_failed: bool = False,
     validate_output: bool = True,
     require_wt_for_transforms: bool = False,
@@ -247,6 +300,7 @@ def build_mavedb_dataset(
     out["status"] = parsed_df["status"]
     out["error"] = parsed_df["error"]
     out["is_wildtype"] = parsed_df["is_wildtype"]
+    out["is_synthetic"] = False
     out["n_mutations"] = parsed_df["n_mutations"]
 
     out["score_raw"] = pd.to_numeric(out[score_col], errors="coerce")
@@ -257,9 +311,19 @@ def build_mavedb_dataset(
     if drop_failed:
         out = out[out["status"] == "OK"].copy()
 
+    out = _maybe_add_wildtype_row(
+        out,
+        add_wildtype_row=add_wildtype_row,
+        wt_sequence=wt_seq,
+        dataset_id=dataset_id,
+        source="mavedb",
+        protein_id=protein_id,
+        gene=gene,
+        uniprot_id=uniprot_id,
+    )
+
     if add_relative_score:
-        wt_exists = has_wildtype_row(out, wt_col="is_wildtype", status_col="status")
-        if wt_exists:
+        try:
             out = _maybe_add_transforms(
                 out,
                 score_col="score_raw",
@@ -271,20 +335,21 @@ def build_mavedb_dataset(
                 higher_is_better=higher_is_better,
                 binary_output_col=binary_output_col,
             )
+        except MissingWildTypeError as exc:
+            if require_wt_for_transforms:
+                raise ValueError(
+                    "WT-relative transforms were requested, but no valid numeric WT score was found."
+                ) from exc
+            logger.warning(
+                "Skipped requested WT-relative transformation source=mavedb "
+                "dataset_id=%s reason=no_valid_numeric_wild_type_score",
+                dataset_id,
+            )
+        else:
             logger.info(
                 "Applied score transformations source=mavedb dataset_id=%s "
                 "relative_method=%s binary_label=%s",
                 dataset_id, relative_method, add_binary_label,
-            )
-        elif require_wt_for_transforms:
-            raise ValueError(
-                "WT-relative transforms were requested, but no valid WT row was found."
-            )
-        else:
-            logger.warning(
-                "Skipped requested WT-relative transformation source=mavedb "
-                "dataset_id=%s reason=no_valid_wild_type_row",
-                dataset_id,
             )
     elif add_binary_label:
         raise ValueError(
@@ -339,6 +404,7 @@ def build_proteingym_dataset(
     delta: float = 0.1,
     higher_is_better: bool = True,
     binary_output_col: str = "score_binary_like",
+    add_wildtype_row: bool = False,
     drop_failed: bool = False,
     validate_output: bool = True,
     require_wt_for_transforms: bool = False,
@@ -400,6 +466,7 @@ def build_proteingym_dataset(
     out["status"] = parsed_df["status"]
     out["error"] = parsed_df["error"]
     out["is_wildtype"] = parsed_df["is_wildtype"]
+    out["is_synthetic"] = False
     out["n_mutations"] = parsed_df["n_mutations"]
 
     out["score_raw"] = pd.to_numeric(out[score_col], errors="coerce")
@@ -411,9 +478,19 @@ def build_proteingym_dataset(
     if drop_failed:
         out = out[out["status"] == "OK"].copy()
 
+    out = _maybe_add_wildtype_row(
+        out,
+        add_wildtype_row=add_wildtype_row,
+        wt_sequence=wt_seq,
+        dataset_id=dataset_id,
+        source="proteingym",
+        protein_id=protein_id,
+        gene=gene,
+        uniprot_id=uniprot_id,
+    )
+
     if add_relative_score:
-        wt_exists = has_wildtype_row(out, wt_col="is_wildtype", status_col="status")
-        if wt_exists:
+        try:
             out = _maybe_add_transforms(
                 out,
                 score_col="score_raw",
@@ -425,20 +502,21 @@ def build_proteingym_dataset(
                 higher_is_better=higher_is_better,
                 binary_output_col=binary_output_col,
             )
+        except MissingWildTypeError as exc:
+            if require_wt_for_transforms:
+                raise ValueError(
+                    "WT-relative transforms were requested, but no valid numeric WT score was found."
+                ) from exc
+            logger.warning(
+                "Skipped requested WT-relative transformation source=proteingym "
+                "dataset_id=%s reason=no_valid_numeric_wild_type_score",
+                dataset_id,
+            )
+        else:
             logger.info(
                 "Applied score transformations source=proteingym dataset_id=%s "
                 "relative_method=%s binary_label=%s",
                 dataset_id, relative_method, add_binary_label,
-            )
-        elif require_wt_for_transforms:
-            raise ValueError(
-                "WT-relative transforms were requested, but no valid WT row was found."
-            )
-        else:
-            logger.warning(
-                "Skipped requested WT-relative transformation source=proteingym "
-                "dataset_id=%s reason=no_valid_wild_type_row",
-                dataset_id,
             )
     elif add_binary_label:
         raise ValueError(

@@ -28,6 +28,53 @@ def test_compute_wt_score_no_wt_raises(simple_variant_df: pd.DataFrame):
         compute_wt_score(df, score_col="score_raw")
 
 
+def test_compute_wt_score_ignores_scoreless_synthetic_wt():
+    df = pd.DataFrame(
+        {
+            "score_raw": [np.nan, "not-numeric", 2.0, 4.0, 0.5],
+            "is_wildtype": [True, True, True, True, False],
+            "is_synthetic": [True, False, False, False, False],
+            "status": ["OK", "OK", "OK", "OK", "OK"],
+        }
+    )
+
+    assert compute_wt_score(df, "score_raw", status_col="status") == 3.0
+
+
+def test_compute_wt_score_rejects_only_scoreless_wt():
+    df = pd.DataFrame(
+        {
+            "score_raw": [np.nan, 0.5],
+            "is_wildtype": [True, False],
+            "status": ["OK", "OK"],
+        }
+    )
+
+    with pytest.raises(MissingWildTypeError, match="No valid numeric wild-type score"):
+        compute_wt_score(df, "score_raw", status_col="status")
+
+
+def test_compute_wt_score_filters_status_before_numeric_scores():
+    df = pd.DataFrame(
+        {
+            "score_raw": [10.0, 2.0],
+            "is_wildtype": [True, True],
+            "status": ["Error", "OK"],
+        }
+    )
+
+    assert compute_wt_score(df, "score_raw", status_col="status") == 2.0
+
+
+def test_scoreless_wt_does_not_create_relative_column():
+    df = pd.DataFrame({"score_raw": [np.nan, 0.5], "is_wildtype": [True, False]})
+
+    with pytest.raises(MissingWildTypeError, match="No valid numeric wild-type score"):
+        add_wt_relative_score(df, "score_raw", output_col="relative")
+
+    assert "relative" not in df.columns
+
+
 @pytest.mark.parametrize(
     ("method", "expected"),
     [

@@ -153,6 +153,26 @@ def test_parse_hgvs_pro_synonymous():
     assert result == [("M", 1, "M")]
 
 
+def test_parse_hgvs_complete_identity_is_wildtype(wt_sequence: str):
+    assert parse_hgvs_pro("p.=") == []
+    assert hgvs_to_sequence(wt_sequence, "p.=") == (wt_sequence, "")
+    assert is_wildtype_variant(hgvs_to_sequence(wt_sequence, "p.=")[1]) is True
+
+
+def test_hgvs_population_synonymous_is_not_complete_wildtype():
+    assert is_wildtype_variant("p.(=)") is False
+    with pytest.raises(InvalidHGVSVariantError):
+        parse_hgvs_pro("p.(=)")
+
+
+def test_hgvs_position_equality_is_not_complete_wildtype(wt_sequence: str):
+    mutated, variant = hgvs_to_sequence(wt_sequence, "p.Lys2=")
+
+    assert mutated == wt_sequence
+    assert variant == "K2K"
+    assert is_wildtype_variant(variant) is False
+
+
 def test_parse_hgvs_pro_invalid_raises():
     with pytest.raises(InvalidHGVSVariantError):
         parse_hgvs_pro("p.invalid")

@@ -61,6 +61,7 @@ def standardized_dataset(wt_sequence: str) -> pd.DataFrame:
             ],
             "n_mutations": [0, 1, 1, 1],
             "is_wildtype": [True, False, False, False],
+            "is_synthetic": [False, False, False, False],
             "score_raw": [1.0, 0.8, 1.2, 0.1],
             "status": ["OK", "OK", "OK", "OK"],
             "error": ["", "", "", ""],

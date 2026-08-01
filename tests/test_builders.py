@@ -1,11 +1,47 @@
 from __future__ import annotations
 
+import warnings
 from inspect import signature
 
 import pandas as pd
 import pytest
 
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
+
+
+def _build_source_dataset(
+    tmp_path,
+    source: str,
+    variants: list[str],
+    scores: list[float],
+    **kwargs,
+) -> pd.DataFrame:
+    """Build a small source-specific dataset with shared metadata."""
+    if source == "proteingym":
+        path = tmp_path / "proteingym.csv"
+        pd.DataFrame({"mutant": variants, "DMS_score": scores}).to_csv(path, index=False)
+        return build_proteingym_dataset(
+            input_path=path,
+            score_col="DMS_score",
+            variant_col="mutant",
+            **kwargs,
+        )
+
+    path = tmp_path / "mavedb.csv"
+    pd.DataFrame({"hgvs_pro": variants, "score": scores}).to_csv(path, index=False)
+    return build_mavedb_dataset(
+        input_path=path,
+        score_col="score",
+        hgvs_col="hgvs_pro",
+        **kwargs,
+    )
+
+
+def _source_variants(source: str, *, include_wt: bool = False) -> list[str]:
+    """Return equivalent source-specific variant strings."""
+    if source == "proteingym":
+        return ["WT", "M1A"] if include_wt else ["M1A"]
+    return ["p.=", "p.Met1Ala"] if include_wt else ["p.Met1Ala"]
 
 
 @pytest.mark.parametrize(
@@ -17,6 +53,205 @@ def test_builder_score_transform_defaults_are_disabled(builder):
 
     assert parameters["add_relative_score"].default is False
     assert parameters["add_binary_label"].default is False
+    assert parameters["add_wildtype_row"].default is False
+
+
+@pytest.mark.parametrize("source", ["proteingym", "mavedb"])
+def test_dataset_without_wt_keeps_source_rows_by_default(
+    source: str,
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        source,
+        _source_variants(source),
+        [0.5],
+        wt_sequence=wt_sequence,
+    )
+
+    assert len(result) == 1
+    assert result["is_synthetic"].tolist() == [False]
+    assert result["score_raw"].tolist() == [0.5]
+
+
+@pytest.mark.parametrize("source", ["proteingym", "mavedb"])
+def test_add_wildtype_row_prepends_exact_scoreless_row(
+    source: str,
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        source,
+        _source_variants(source),
+        [0.5],
+        wt_sequence=wt_sequence,
+        dataset_id="dataset-1",
+        protein_id="protein-1",
+        gene="GENE1",
+        uniprot_id="P12345",
+        add_wildtype_row=True,
+    )
+
+    synthetic = result.iloc[0]
+    assert isinstance(result.index, pd.RangeIndex)
+    assert len(result) == 2
+    assert synthetic[
+        ["dataset_id", "source", "protein_id", "gene", "uniprot_id"]
+    ].to_dict() == {
+        "dataset_id": "dataset-1",
+        "source": source,
+        "protein_id": "protein-1",
+        "gene": "GENE1",
+        "uniprot_id": "P12345",
+    }
+    assert synthetic["variant"] == ""
+    assert synthetic["mutated_sequence"] == wt_sequence
+    assert synthetic["wt_sequence"] == wt_sequence
+    assert synthetic["is_wildtype"] == True
+    assert synthetic["n_mutations"] == 0
+    assert pd.isna(synthetic["score_raw"])
+    assert synthetic["status"] == "OK"
+    assert synthetic["error"] == ""
+    assert synthetic["is_synthetic"] == True
+    assert pd.isna(synthetic["mutant" if source == "proteingym" else "hgvs_pro"])
+    assert result.iloc[1]["is_synthetic"] == False
+    assert result.iloc[1]["score_raw"] == 0.5
+
+
+@pytest.mark.parametrize("source", ["proteingym", "mavedb"])
+def test_add_wildtype_row_emits_no_future_warning(
+    source: str,
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        result = _build_source_dataset(
+            tmp_path,
+            source,
+            _source_variants(source),
+            [0.5],
+            wt_sequence=wt_sequence,
+            add_wildtype_row=True,
+        )
+
+    assert isinstance(result.index, pd.RangeIndex)
+    assert result["is_synthetic"].tolist() == [True, False]
+
+
+@pytest.mark.parametrize("source", ["proteingym", "mavedb"])
+def test_existing_observed_wt_is_not_duplicated_or_rescored(
+    source: str,
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        source,
+        _source_variants(source, include_wt=True),
+        [2.5, 0.5],
+        wt_sequence=wt_sequence,
+        add_wildtype_row=True,
+    )
+
+    assert len(result) == 2
+    assert int(result["is_wildtype"].sum()) == 1
+    assert result["is_synthetic"].tolist() == [False, False]
+    assert result["score_raw"].tolist() == [2.5, 0.5]
+
+
+def test_mavedb_complete_identity_builds_observed_wt(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        "mavedb",
+        ["p.="],
+        [2.5],
+        wt_sequence=wt_sequence,
+    )
+
+    observed = result.iloc[0]
+    assert observed["variant"] == ""
+    assert observed["mutated_sequence"] == wt_sequence
+    assert observed["is_wildtype"] == True
+    assert observed["n_mutations"] == 0
+    assert observed["is_synthetic"] == False
+    assert observed["score_raw"] == 2.5
+
+
+@pytest.mark.parametrize(
+    ("source", "variants"),
+    [
+        ("proteingym", ["not-a-variant", "M1A"]),
+        ("mavedb", ["p.invalid", "p.Met1Ala"]),
+    ],
+)
+def test_drop_failed_precedes_synthetic_wt_insertion(
+    source: str,
+    variants: list[str],
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        source,
+        variants,
+        [9.0, 0.5],
+        wt_sequence=wt_sequence,
+        drop_failed=True,
+        add_wildtype_row=True,
+    )
+
+    assert isinstance(result.index, pd.RangeIndex)
+    assert result["is_synthetic"].tolist() == [True, False]
+    assert result["status"].tolist() == ["OK", "OK"]
+    assert result["score_raw"].iloc[1:].tolist() == [0.5]
+
+
+@pytest.mark.parametrize("source", ["proteingym", "mavedb"])
+def test_scoreless_synthetic_wt_skips_relative_transform(
+    source: str,
+    tmp_path,
+    wt_sequence: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("WARNING", logger="dms_parser.builders")
+
+    result = _build_source_dataset(
+        tmp_path,
+        source,
+        _source_variants(source),
+        [0.5],
+        wt_sequence=wt_sequence,
+        add_wildtype_row=True,
+        add_relative_score=True,
+    )
+
+    assert "score_log_ratio" not in result.columns
+    assert "reason=no_valid_numeric_wild_type_score" in caplog.text
+
+
+@pytest.mark.parametrize("source", ["proteingym", "mavedb"])
+def test_scoreless_synthetic_wt_can_be_required_for_transform(
+    source: str,
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    with pytest.raises(ValueError, match="no valid numeric WT score"):
+        _build_source_dataset(
+            tmp_path,
+            source,
+            _source_variants(source),
+            [0.5],
+            wt_sequence=wt_sequence,
+            add_wildtype_row=True,
+            add_relative_score=True,
+            require_wt_for_transforms=True,
+        )
 
 
 @pytest.mark.parametrize("transform_kwargs", [{}, {"add_relative_score": False}])

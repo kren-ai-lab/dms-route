@@ -57,6 +57,7 @@ It is a **clean data + representation layer**.
 
 * Internal notation: `A23V`, `M1A;K2R`
 * HGVS protein notation: `p.Met1Ala`, `p.[Met1Ala;Lys2Arg]`
+* MaveDB complete-target identity: `p.=`
 
 ### ✅ Sequence reconstruction
 
@@ -207,6 +208,13 @@ Source-level `default_build_kwargs` apply to every dataset. A dataset's own
 opt-in. `drop_failed: false` retains unsupported and error rows for
 traceability; `true` saves only rows whose status is `OK`.
 
+Both builders and YAML `build_kwargs` accept the opt-in
+`add_wildtype_row: true` setting. It prepends one WT sequence row only when a
+valid WT row is missing. The generated row has a missing `score_raw` because no
+experimental score is inferred, and `is_synthetic` distinguishes it from
+published observations. WT-relative transformations still require a numeric
+observed WT score.
+
 Processed CSV files are written under each source's
 `<dir_base>/processed/` directory. The configured `output.summary_dir`
 receives combined CSV and JSON summaries. One failed dataset does not abort
@@ -242,6 +250,7 @@ All datasets are transformed into a common structure:
 | `mutated_sequence` | Reconstructed protein sequence                |
 | `score_raw`        | Original score                                |
 | `is_wildtype`      | WT flag                                       |
+| `is_synthetic`     | Generated-row flag                            |
 | `n_mutations`      | Number of substitutions                       |
 | `status`           | Parsing status (`OK`, `Error`, `Unsupported`) |
 | `error`            | Error message (if any)                        |

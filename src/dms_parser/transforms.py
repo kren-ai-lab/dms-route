@@ -17,6 +17,9 @@ def compute_wt_score(
     df: pd.DataFrame,
     score_col: str,
     wt_col: str = "is_wildtype",
+    *,
+    status_col: str | None = None,
+    accepted_status: str = "OK",
 ) -> float:
     """Extract the wild-type reference score."""
     wt_rows = df[df[wt_col] == True]
@@ -24,11 +27,14 @@ def compute_wt_score(
     if wt_rows.empty:
         raise MissingWildTypeError("No wild-type row found in dataset.")
 
-    if len(wt_rows) > 1:
-        # Average multiple WT measurements when a dataset provides them.
-        return wt_rows[score_col].mean()
+    if status_col is not None:
+        wt_rows = wt_rows[wt_rows[status_col] == accepted_status]
 
-    return wt_rows[score_col].iloc[0]
+    numeric_scores = pd.to_numeric(wt_rows[score_col], errors="coerce").dropna()
+    if numeric_scores.empty:
+        raise MissingWildTypeError("No valid numeric wild-type score found in dataset.")
+
+    return float(numeric_scores.mean())
 
 
 def add_wt_relative_score(
@@ -38,6 +44,8 @@ def add_wt_relative_score(
     method: str = "log_ratio",
     epsilon: float = DEFAULT_EPSILON,
     output_col: str | None = None,
+    status_col: str | None = None,
+    accepted_status: str = "OK",
 ) -> pd.DataFrame:
     """Add WT-relative score to the dataset.
 
@@ -49,7 +57,13 @@ def add_wt_relative_score(
     """
     df = df.copy()
 
-    wt_score = compute_wt_score(df, score_col, wt_col)
+    wt_score = compute_wt_score(
+        df,
+        score_col,
+        wt_col,
+        status_col=status_col,
+        accepted_status=accepted_status,
+    )
 
     values = df[score_col].astype(float)
 
