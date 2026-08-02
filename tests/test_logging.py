@@ -230,6 +230,39 @@ def test_builder_logs_aggregate_counts_without_wt_or_row_flood(
     assert len(builder_records) <= 6
 
 
+def test_builder_logs_synthetic_wt_addition_and_existing_wt(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    input_path = tmp_path / "scores.csv"
+    pd.DataFrame({"mutant": ["M1A"], "DMS_score": [0.5]}).to_csv(input_path, index=False)
+    caplog.set_level(logging.DEBUG, logger="dms_parser.builders")
+
+    build_proteingym_dataset(
+        input_path,
+        score_col="DMS_score",
+        variant_col="mutant",
+        dataset_id="assay-1",
+        wt_sequence="MKT",
+        add_wildtype_row=True,
+    )
+
+    assert "Added synthetic wild-type row source=proteingym dataset_id=assay-1" in caplog.text
+
+    caplog.clear()
+    pd.DataFrame({"mutant": ["WT"], "DMS_score": [1.0]}).to_csv(input_path, index=False)
+    build_proteingym_dataset(
+        input_path,
+        score_col="DMS_score",
+        variant_col="mutant",
+        dataset_id="assay-1",
+        wt_sequence="MKT",
+        add_wildtype_row=True,
+    )
+
+    assert "Synthetic wild-type row not needed source=proteingym dataset_id=assay-1" in caplog.text
+
+
 def test_download_logging_redacts_url_secrets_and_preserves_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -17,6 +17,7 @@ STANDARD_COLUMNS = [
     "variant",
     "n_mutations",
     "is_wildtype",
+    "is_synthetic",
     "score_raw",
     "score_normalized",
     "score_log_ratio",

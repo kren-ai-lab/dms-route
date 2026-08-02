@@ -51,6 +51,13 @@ class MetadataResponse:
         return self._metadata
 
 
+def _mock_built_table() -> pd.DataFrame:
+    """Return the standardized columns needed by pipeline accounting."""
+    return pd.DataFrame(
+        {"status": ["OK"], "is_wildtype": [False], "is_synthetic": [False]}
+    )
+
+
 def test_mavedb_metadata_only_skips_dataset_acquisition(
     tmp_path,
     monkeypatch,
@@ -202,7 +209,7 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
 
     def build_dataset(**kwargs):
         builder_calls.append(kwargs)
-        return pd.DataFrame({"status": ["OK"]})
+        return _mock_built_table()
 
     monkeypatch.setattr(pipeline_module.requests, "get", source_request)
     monkeypatch.setattr(
@@ -231,6 +238,7 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
     assert builder_calls[0]["uniprot_id"] == "P12345"
     assert builder_calls[0]["add_relative_score"] is False
     assert builder_calls[0]["add_binary_label"] is False
+    assert builder_calls[0]["add_wildtype_row"] is False
     assert builder_calls[0]["drop_failed"] is False
     assert result[0]["status"] == "OK"
     assert (source_root / "raw").exists()
@@ -339,7 +347,7 @@ def test_normal_proteingym_execution_keeps_existing_acquisition_path(
 
     def build_dataset(**kwargs):
         builder_calls.append(kwargs)
-        return pd.DataFrame({"status": ["OK"]})
+        return _mock_built_table()
 
     monkeypatch.setattr(pipeline_module, "download_file", offline_download)
     monkeypatch.setattr(pipeline_module, "read_table", offline_read)
@@ -366,6 +374,7 @@ def test_normal_proteingym_execution_keeps_existing_acquisition_path(
     assert builder_calls[0]["uniprot_id"] == "P12345"
     assert builder_calls[0]["add_relative_score"] is False
     assert builder_calls[0]["add_binary_label"] is False
+    assert builder_calls[0]["add_wildtype_row"] is False
     assert builder_calls[0]["drop_failed"] is False
     assert result[0]["status"] == "OK"
     assert (source_root / "raw").exists()

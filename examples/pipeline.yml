@@ -15,6 +15,7 @@ proteingym:
     variant_col: mutant
     add_relative_score: false
     add_binary_label: false
+    add_wildtype_row: false
     drop_failed: false
 
   datasets:
@@ -34,6 +35,7 @@ mavedb:
   default_build_kwargs:
     add_relative_score: false
     add_binary_label: false
+    add_wildtype_row: false
     drop_failed: false
 
   datasets:

@@ -32,6 +32,13 @@ def _proteingym_config(root: Path, *dataset_ids: str) -> dict[str, Any]:
     }
 
 
+def _mock_built_table() -> pd.DataFrame:
+    """Return the standardized columns needed by pipeline accounting."""
+    return pd.DataFrame(
+        {"status": ["OK"], "is_wildtype": [False], "is_synthetic": [False]}
+    )
+
+
 @pytest.mark.parametrize("only", ["invalid", "", None, 1])
 def test_run_pipeline_rejects_invalid_only_values(
     only: object,
@@ -186,7 +193,7 @@ def test_build_kwargs_are_deep_merged_once(
 
     def build_dataset(**kwargs: Any) -> pd.DataFrame:
         builder_calls.append(kwargs)
-        return pd.DataFrame({"status": ["OK"]})
+        return _mock_built_table()
 
     monkeypatch.setattr(pipeline_module, "_deep_merge", merge_once)
     monkeypatch.setattr(
@@ -222,6 +229,7 @@ def test_build_kwargs_are_deep_merged_once(
     assert builder_calls[0]["uniprot_id"] == "P12345"
     assert builder_calls[0]["add_relative_score"] is False
     assert builder_calls[0]["add_binary_label"] is False
+    assert builder_calls[0]["add_wildtype_row"] is False
     assert builder_calls[0]["drop_failed"] is False
 
 
@@ -258,7 +266,7 @@ def test_mavedb_dataset_columns_and_metadata_reach_builder(
 
     def build_dataset(**kwargs: Any) -> pd.DataFrame:
         builder_calls.append(kwargs)
-        return pd.DataFrame({"status": ["OK"]})
+        return _mock_built_table()
 
     monkeypatch.setattr(pipeline_module.requests, "get", source_request)
     monkeypatch.setattr(
@@ -287,6 +295,7 @@ def test_mavedb_dataset_columns_and_metadata_reach_builder(
     assert builder_calls[0]["protein_id"] is None
     assert builder_calls[0]["gene"] == "GENE1"
     assert builder_calls[0]["uniprot_id"] == "P12345"
+    assert builder_calls[0]["add_wildtype_row"] is False
 
 
 def test_dataset_failure_does_not_abort_later_dataset(
@@ -326,7 +335,7 @@ def test_dataset_failure_does_not_abort_later_dataset(
 
     def build_dataset(**kwargs: Any) -> pd.DataFrame:
         builder_calls.append(kwargs["dataset_id"])
-        return pd.DataFrame({"status": ["OK"]})
+        return _mock_built_table()
 
     monkeypatch.setattr(
         pipeline_module,
@@ -348,6 +357,169 @@ def test_dataset_failure_does_not_abort_later_dataset(
     assert [row["status"] for row in summary] == ["ERROR", "OK"]
     assert "No information found" in summary[0]["error"]
     assert builder_calls == ["SECOND"]
+
+
+def test_completed_dataset_counts_exclude_synthetic_wt_from_discarded() -> None:
+    built_table = pd.DataFrame(
+        {
+            "status": ["OK", "OK"],
+            "is_wildtype": [True, False],
+            "is_synthetic": [True, False],
+        }
+    )
+
+    counts = pipeline_module._completed_dataset_counts(built_table, raw_rows=1)
+
+    assert counts == {
+        "validated_rows": 2,
+        "discarded_rows": 0,
+        "output_rows": 2,
+        "wildtype_rows": 1,
+        "synthetic_wildtype_rows": 1,
+    }
+
+
+def test_proteingym_pipeline_accounts_for_generated_wt_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = pd.DataFrame(
+        {
+            "DMS_filename": ["assay.csv"],
+            "DMS_id": ["ASSAY_1"],
+            "target_seq": ["MKT"],
+        }
+    )
+    benchmark = pd.DataFrame(
+        {"DMS_id": ["ASSAY_1"], "mutant": ["M1A"], "DMS_score": [0.5]}
+    )
+    source_root = tmp_path / "proteingym"
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "download_file",
+        lambda url, output_path, overwrite=False: Path(output_path),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "read_table",
+        lambda path: metadata if Path(path).name == "DMS_substitutions.csv" else benchmark,
+    )
+
+    summary = pipeline_module.process_proteingym(
+        {
+            "resource": "dms_substitutions",
+            "dir_base": source_root,
+            "default_build_kwargs": {"add_wildtype_row": True},
+            "datasets": [{"dataset_id": "ASSAY_1"}],
+        }
+    )
+
+    output = pd.read_csv(source_root / "processed" / "ASSAY_1_processed.csv")
+    assert len(output) == 2
+    assert summary[0]["output_rows"] == 2
+    assert summary[0]["raw_rows"] == 1
+    assert summary[0]["discarded_rows"] == 0
+    assert summary[0]["wildtype_rows"] == 1
+    assert summary[0]["synthetic_wildtype_rows"] == 1
+
+
+def test_proteingym_wt_row_source_default_and_dataset_override_are_forwarded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = pd.DataFrame(
+        {
+            "DMS_filename": ["first.csv", "second.csv"],
+            "DMS_id": ["FIRST", "SECOND"],
+            "target_seq": ["MKT", "MKT"],
+        }
+    )
+    benchmark = pd.DataFrame(
+        {
+            "DMS_id": ["FIRST", "SECOND"],
+            "mutant": ["M1A", "M1A"],
+            "DMS_score": [0.5, 0.6],
+        }
+    )
+    builder_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "download_file",
+        lambda url, output_path, overwrite=False: Path(output_path),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "read_table",
+        lambda path: metadata if Path(path).name == "DMS_substitutions.csv" else benchmark,
+    )
+
+    def build_dataset(**kwargs: Any) -> pd.DataFrame:
+        builder_calls.append(kwargs)
+        return _mock_built_table()
+
+    monkeypatch.setattr(pipeline_module, "build_proteingym_dataset", build_dataset)
+
+    pipeline_module.process_proteingym(
+        {
+            "resource": "dms_substitutions",
+            "dir_base": tmp_path / "proteingym",
+            "default_build_kwargs": {"add_wildtype_row": True},
+            "datasets": [
+                {"dataset_id": "FIRST"},
+                {"dataset_id": "SECOND", "build_kwargs": {"add_wildtype_row": False}},
+            ],
+        }
+    )
+
+    assert [call["add_wildtype_row"] for call in builder_calls] == [True, False]
+
+
+def test_mavedb_wt_row_source_default_and_dataset_override_are_forwarded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_ids = ["urn:mavedb:00000001-a-1", "urn:mavedb:00000002-a-1"]
+    builder_calls: list[dict[str, Any]] = []
+
+    class MetadataResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {"targetSequence": {"sequence": "MKT"}}
+
+    class ScoresResponse:
+        text = "hgvs_pro,score\np.Met1Ala,0.5\n"
+
+        def raise_for_status(self) -> None:
+            """Represent a successful score response."""
+
+    monkeypatch.setattr(
+        pipeline_module.requests,
+        "get",
+        lambda url, timeout: ScoresResponse() if url.endswith("/scores") else MetadataResponse(),
+    )
+
+    def build_dataset(**kwargs: Any) -> pd.DataFrame:
+        builder_calls.append(kwargs)
+        return _mock_built_table()
+
+    monkeypatch.setattr(pipeline_module, "build_mavedb_dataset", build_dataset)
+
+    pipeline_module.process_mavedb(
+        {
+            "dir_base": tmp_path / "mavedb",
+            "default_build_kwargs": {"add_wildtype_row": True},
+            "datasets": [
+                {"dataset_id": dataset_ids[0]},
+                {"dataset_id": dataset_ids[1], "build_kwargs": {"add_wildtype_row": False}},
+            ],
+        },
+        base_url="https://api.example.test",
+    )
+
+    assert [call["add_wildtype_row"] for call in builder_calls] == [True, False]
 
 
 def test_pipeline_logs_no_full_wt_sequence_or_url_secrets(

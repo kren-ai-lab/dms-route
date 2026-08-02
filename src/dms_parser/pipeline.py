@@ -206,6 +206,7 @@ def process_proteingym(
             build_kwargs.setdefault("variant_col", "mutant")
             build_kwargs.setdefault("add_relative_score", False)
             build_kwargs.setdefault("add_binary_label", False)
+            build_kwargs.setdefault("add_wildtype_row", False)
             build_kwargs.setdefault("drop_failed", False)
             build_kwargs["dataset_id"] = resolved_dataset_id
             build_kwargs["protein_id"] = protein_id
@@ -223,8 +224,7 @@ def process_proteingym(
                 wt_sequence=wt_sequence,
                 **build_kwargs,
             )
-            saved_rows = len(built_table)
-            validated_rows = int((built_table["status"] == "OK").sum())
+            counts = _completed_dataset_counts(built_table, raw_rows=initial_rows)
 
             output_file = (
                 output_dir / f"{resolved_dataset_id}_processed.csv"
@@ -235,12 +235,11 @@ def process_proteingym(
             row.update(
                 {
                     "status": "OK",
-                    "validated_rows": validated_rows,
-                    "discarded_rows": initial_rows - saved_rows,
+                    **counts,
                     "output_file": str(output_file),
                 }
             )
-            logger.info("[proteingym] Complete. Retained rows: %d/%d", saved_rows, initial_rows)
+            logger.info("[proteingym] Complete. Retained rows: %d/%d", counts["output_rows"], initial_rows)
         except Exception as exc:  # noqa: BLE001 - isolate dataset failures
             row["error"] = str(exc)
             logger.exception("[proteingym] Error processing %s", dataset_id)
@@ -356,6 +355,7 @@ def process_mavedb(
             )
             build_kwargs.setdefault("add_relative_score", False)
             build_kwargs.setdefault("add_binary_label", False)
+            build_kwargs.setdefault("add_wildtype_row", False)
             build_kwargs.setdefault("drop_failed", False)
             build_kwargs["score_col"] = score_col
             build_kwargs["hgvs_col"] = hgvs_col
@@ -369,8 +369,7 @@ def process_mavedb(
                 wt_sequence=wt_sequence,
                 **build_kwargs,
             )
-            saved_rows = len(built_table)
-            validated_rows = int((built_table["status"] == "OK").sum())
+            counts = _completed_dataset_counts(built_table, raw_rows=initial_rows)
 
             output_file = (
                 output_dir / f"{dataset_id.replace(':', '_')}_processed.csv"
@@ -381,12 +380,11 @@ def process_mavedb(
             row.update(
                 {
                     "status": "OK",
-                    "validated_rows": validated_rows,
-                    "discarded_rows": initial_rows - saved_rows,
+                    **counts,
                     "output_file": str(output_file),
                 }
             )
-            logger.info("[mavedb] Complete. Retained: %d/%d", saved_rows, initial_rows)
+            logger.info("[mavedb] Complete. Retained: %d/%d", counts["output_rows"], initial_rows)
         except Exception as exc:  # noqa: BLE001 - isolate dataset failures
             row["error"] = str(exc)
             logger.exception("[mavedb] Error processing %s", dataset_id)
@@ -461,6 +459,28 @@ def _deep_merge(
         else:
             merged[key] = value
     return merged
+
+
+def _completed_dataset_counts(
+    built_table: pd.DataFrame,
+    *,
+    raw_rows: int,
+) -> dict[str, int]:
+    """Return row accounting for one completed dataset."""
+    status_ok = built_table["status"] == "OK"
+    is_wildtype = built_table["is_wildtype"].eq(True)
+    is_synthetic_wildtype = is_wildtype & built_table["is_synthetic"].eq(True)
+    output_rows = len(built_table)
+    synthetic_wildtype_rows = int(is_synthetic_wildtype.sum())
+    source_output_rows = output_rows - synthetic_wildtype_rows
+
+    return {
+        "validated_rows": int(status_ok.sum()),
+        "discarded_rows": raw_rows - source_output_rows,
+        "output_rows": output_rows,
+        "wildtype_rows": int((status_ok & is_wildtype).sum()),
+        "synthetic_wildtype_rows": synthetic_wildtype_rows,
+    }
 
 
 def _ensure_dirs(*directories: Path) -> None:
