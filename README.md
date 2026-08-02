@@ -110,6 +110,7 @@ dms-parser --help
 dms-parser run --help
 dms-parser list --help
 dms-parser metadata --help
+dms-parser download --help
 ```
 
 The CLI logs at `INFO` by default; pass `--log-level DEBUG` for diagnostic
@@ -140,6 +141,46 @@ metadata API directly and does not accept the cache, refresh, or variant-type
 options. Query semantics differ between the two sources, and `--variant-type`
 applies only to ProteinGym. Use `--format json` for machine-readable output.
 `--output` writes UTF-8 data and overwrites its target.
+
+### Download and standardize one dataset
+
+The `download` command fetches and standardizes one substitutions dataset
+without requiring `pipeline.yml`:
+
+```bash
+dms-parser download \
+    --source proteingym \
+    --dataset-id BLAT_ECOLX_Jacquier_2013 \
+    --output-dir datasets/blat-jacquier
+
+dms-parser download \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000097-a-1 \
+    --output-dir datasets/mavedb-00000097-a-1
+```
+
+Each successful command writes exactly this bundle:
+
+```text
+<output-dir>/
+├── standardized.csv
+├── summary.csv
+└── summary.json
+```
+
+Original source artifacts remain in `~/.cache/dms-parser` by default.
+`--cache-dir` changes the cache root, and `--refresh` reacquires cached source
+artifacts. `--drop-failed` removes row-level parse failures;
+`--add-wildtype-row` prepends one scoreless WT row only when no valid WT row is
+present. `--overwrite` replaces only the three deterministic files above and
+preserves unrelated files in the output directory.
+
+No score transformations are applied. Raw source columns are retained, so
+"standardized" means that common fields are guaranteed, not that the output has
+an exclusive fixed schema. ProteinGym acquisition may download its complete
+substitutions benchmark before selecting one assay. Indels are not supported,
+and MaveDB datasets with nonstandard score/HGVS columns or no recoverable WT
+sequence may remain unsupported.
 
 ---
 

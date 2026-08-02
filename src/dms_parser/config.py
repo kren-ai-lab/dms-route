@@ -20,6 +20,32 @@ _MAVEDB_SCORE_SET_URN_PATTERN = re.compile(
 )
 
 
+def validate_source_dataset_id(source: str, dataset_id: object) -> None:
+    """Validate one source-specific dataset identifier without performing I/O."""
+    if source not in {"mavedb", "proteingym"}:
+        raise SourceConfigurationError(
+            "source must be 'mavedb' or 'proteingym'."
+        )
+    if not isinstance(dataset_id, str) or not dataset_id.strip():
+        raise SourceConfigurationError(
+            f"The {source!r} dataset_id must be a non-empty string."
+        )
+    if source == "proteingym" and dataset_id.lower().endswith(".csv"):
+        raise SourceConfigurationError(
+            "ProteinGym dataset_id must be the canonical DMS_id, not a "
+            "source filename."
+        )
+    if (
+        source == "mavedb"
+        and _MAVEDB_SCORE_SET_URN_PATTERN.fullmatch(dataset_id) is None
+    ):
+        raise SourceConfigurationError(
+            "MaveDB dataset_id must be a complete permanent score-set URN "
+            "matching 'urn:mavedb:<8 digits>-<lowercase experiment letters "
+            "or 0>-<positive index>'."
+        )
+
+
 def load_pipeline_config(path: str | Path) -> dict[str, Any]:
     """Load and validate a pipeline configuration from a YAML file.
 
@@ -112,13 +138,7 @@ def _validate_mavedb_config(config: object) -> None:
     _validate_dir_base(source_config, "mavedb")
     entries = _validate_dataset_entries(source_config, "mavedb")
     for entry in entries:
-        dataset_id = entry["dataset_id"]
-        if _MAVEDB_SCORE_SET_URN_PATTERN.fullmatch(dataset_id) is None:
-            raise SourceConfigurationError(
-                "MaveDB dataset_id must be a complete permanent score-set URN "
-                "matching 'urn:mavedb:<8 digits>-<lowercase experiment letters "
-                "or 0>-<positive index>'."
-            )
+        validate_source_dataset_id("mavedb", entry["dataset_id"])
 
 
 def _validate_source_mapping(
@@ -205,11 +225,8 @@ def _validate_dataset_entries(
                 f"The {source!r} dataset_id at index {index} must be a "
                 "non-empty string."
             )
-        if source == "proteingym" and dataset_id.lower().endswith(".csv"):
-            raise SourceConfigurationError(
-                "ProteinGym dataset_id must be the canonical DMS_id, not a "
-                "source filename."
-            )
+        if source == "proteingym":
+            validate_source_dataset_id(source, dataset_id)
         if dataset_id in seen:
             raise SourceConfigurationError(
                 f"Duplicate {source} dataset_id {dataset_id!r}."

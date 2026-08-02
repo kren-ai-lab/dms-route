@@ -17,9 +17,9 @@ import requests
 
 from dms_parser.cache import FilesystemCache
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
-from dms_parser.config import load_pipeline_config
+from dms_parser.config import load_pipeline_config, validate_source_dataset_id
 from dms_parser.exceptions import DMSParserError, SourceConfigurationError
-from dms_parser.pipeline import run_pipeline
+from dms_parser.pipeline import download_and_standardize_dataset, run_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,13 @@ def _non_empty_dataset_id(value: str) -> str:
     if not value.strip():
         raise argparse.ArgumentTypeError("must be a non-empty dataset identifier")
     return value
+
+
+def _non_empty_path(value: str) -> Path:
+    """Reject empty paths while preserving normal pathlib parsing."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError("must be a non-empty path")
+    return Path(value)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -138,6 +145,41 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_catalog_options(metadata_parser)
     metadata_parser.set_defaults(handler=_metadata_command, command_parser=metadata_parser)
+
+    download_parser = subparsers.add_parser(
+        "download",
+        help="Download and standardize one substitutions dataset.",
+    )
+    download_parser.add_argument(
+        "--source",
+        choices=_CATALOG_SOURCES,
+        required=True,
+    )
+    download_parser.add_argument(
+        "--dataset-id",
+        required=True,
+        type=_non_empty_dataset_id,
+    )
+    download_parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=_non_empty_path,
+    )
+    download_parser.add_argument("--cache-dir", type=_non_empty_path)
+    download_parser.add_argument("--refresh", action="store_true")
+    download_parser.add_argument("--drop-failed", action="store_true")
+    download_parser.add_argument("--add-wildtype-row", action="store_true")
+    download_parser.add_argument("--overwrite", action="store_true")
+    download_parser.add_argument(
+        "--log-level",
+        choices=_LOG_LEVELS,
+        default="INFO",
+        help="Set the process logging level (default: INFO).",
+    )
+    download_parser.set_defaults(
+        handler=_download_command,
+        command_parser=download_parser,
+    )
     return parser
 
 
@@ -230,6 +272,42 @@ def _metadata_command(args: argparse.Namespace) -> int:
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("Catalog metadata lookup failed: %s", exc)
         return 1
+    return 0
+
+
+def _download_command(args: argparse.Namespace) -> int:
+    """Download and standardize one source dataset."""
+    try:
+        validate_source_dataset_id(args.source, args.dataset_id)
+    except SourceConfigurationError as exc:
+        args.command_parser.error(str(exc))
+
+    cache_root = (
+        args.cache_dir.expanduser()
+        if args.cache_dir is not None
+        else _default_cache_root()
+    )
+    try:
+        result = download_and_standardize_dataset(
+            args.source,
+            args.dataset_id,
+            output_dir=args.output_dir.expanduser(),
+            cache=FilesystemCache(cache_root),
+            refresh=args.refresh,
+            drop_failed=args.drop_failed,
+            add_wildtype_row=args.add_wildtype_row,
+            overwrite=args.overwrite,
+        )
+    except (DMSParserError, requests.RequestException, OSError) as exc:
+        logger.error("Dataset download failed: %s", exc)
+        return 1
+
+    logger.info(
+        "Dataset download completed dataset=%s summary_csv=%s summary_json=%s",
+        result.dataset_path,
+        result.summary_csv_path,
+        result.summary_json_path,
+    )
     return 0
 
 

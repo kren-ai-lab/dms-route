@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 import dms_parser.pipeline as pipeline_module
+from dms_parser.config import validate_source_dataset_id
 from dms_parser import (
     PROTEINGYM_RESOURCES,
     SourceConfigurationError,
@@ -50,6 +51,38 @@ INVALID_MAVEDB_DATASET_IDS = (
     "urn:mavedb:00000055-A-1",
     "urn:mavedb:00000055-a-0",
 )
+
+
+@pytest.mark.parametrize(
+    ("source", "dataset_id"),
+    [
+        ("proteingym", "ASSAY_1"),
+        ("mavedb", "urn:mavedb:00000001-a-1"),
+    ],
+)
+def test_shared_source_dataset_id_validation_accepts_supported_identifiers(
+    source: str,
+    dataset_id: str,
+) -> None:
+    validate_source_dataset_id(source, dataset_id)
+
+
+@pytest.mark.parametrize(
+    ("source", "dataset_id", "message"),
+    [
+        ("proteingym", "ASSAY.csv", "canonical DMS_id"),
+        ("mavedb", "not-a-urn", "complete permanent score-set URN"),
+        ("unknown", "dataset", "source must be"),
+        ("proteingym", "   ", "non-empty string"),
+    ],
+)
+def test_shared_source_dataset_id_validation_rejects_invalid_identifiers(
+    source: str,
+    dataset_id: str,
+    message: str,
+) -> None:
+    with pytest.raises(SourceConfigurationError, match=message):
+        validate_source_dataset_id(source, dataset_id)
 
 EXPECTED_RESOURCES = {
     "dms_substitutions": {

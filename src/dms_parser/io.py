@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import pandas as pd
@@ -14,6 +17,149 @@ import requests
 from dms_parser.exceptions import DownloadError, FileFormatError
 
 logger = logging.getLogger(__name__)
+
+_DATASET_FILENAME = "standardized.csv"
+_SUMMARY_CSV_FILENAME = "summary.csv"
+_SUMMARY_JSON_FILENAME = "summary.json"
+
+
+def _dataset_bundle_paths(output_dir: str | Path) -> tuple[Path, Path, Path]:
+    """Return the deterministic paths for one standardized dataset bundle."""
+    root = Path(output_dir)
+    return (
+        root / _DATASET_FILENAME,
+        root / _SUMMARY_CSV_FILENAME,
+        root / _SUMMARY_JSON_FILENAME,
+    )
+
+
+def _preflight_dataset_bundle(
+    output_dir: str | Path,
+    *,
+    overwrite: bool,
+) -> tuple[Path, Path, Path]:
+    """Validate bundle destinations without creating or modifying anything."""
+    root = Path(output_dir)
+    if root.exists() and not root.is_dir():
+        raise NotADirectoryError(
+            f"Dataset output directory is not a directory: {root}"
+        )
+    paths = _dataset_bundle_paths(root)
+    if not overwrite:
+        existing = [path for path in paths if path.exists()]
+        if existing:
+            joined = ", ".join(str(path) for path in existing)
+            raise FileExistsError(
+                f"Dataset output already exists; use overwrite=True: {joined}"
+            )
+    else:
+        invalid = [path for path in paths if path.exists() and not path.is_file()]
+        if invalid:
+            joined = ", ".join(str(path) for path in invalid)
+            raise IsADirectoryError(
+                f"Dataset output targets must be regular files: {joined}"
+            )
+    return paths
+
+
+def _publish_dataset_bundle(
+    dataset: pd.DataFrame,
+    summary: dict[str, Any],
+    output_dir: str | Path,
+    *,
+    overwrite: bool,
+) -> tuple[Path, Path, Path]:
+    """Stage and publish one dataset and its summaries as a best-effort bundle."""
+    output_dir = Path(output_dir)
+    paths = _dataset_bundle_paths(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    staging_root = Path(
+        tempfile.mkdtemp(
+            prefix=".dms-parser-bundle-",
+            dir=output_dir,
+        )
+    )
+    cleanup_staging = True
+    try:
+        staged_paths = tuple(staging_root / path.name for path in paths)
+        _write_csv_lf(dataset, staged_paths[0])
+        _write_csv_lf(pd.DataFrame([summary]), staged_paths[1])
+        with staged_paths[2].open("w", encoding="utf-8", newline="") as handle:
+            handle.write(
+                json.dumps(
+                    [summary],
+                    indent=2,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                )
+                + "\n"
+            )
+
+        _preflight_dataset_bundle(output_dir, overwrite=overwrite)
+        backups: list[tuple[Path, Path]] = []
+        published: list[Path] = []
+        try:
+            for index, (staged_path, final_path) in enumerate(
+                zip(staged_paths, paths, strict=True)
+            ):
+                if final_path.exists():
+                    if not overwrite:
+                        raise FileExistsError(
+                            "Dataset output appeared during publication: "
+                            f"{final_path}"
+                        )
+                    backup_path = staging_root / f"backup-{index}-{final_path.name}"
+                    os.replace(final_path, backup_path)
+                    backups.append((final_path, backup_path))
+                os.replace(staged_path, final_path)
+                published.append(final_path)
+        except OSError as exc:
+            rollback_errors = _rollback_dataset_bundle(backups, published)
+            if rollback_errors:
+                # Retain any surviving backups when rollback cannot fully restore
+                # the original bundle; the exception identifies their location.
+                cleanup_staging = False
+                details = "; ".join(str(error) for error in rollback_errors)
+                raise OSError(
+                    f"Dataset output publication failed and rollback was "
+                    f"incomplete; recovery files remain in {staging_root}: "
+                    f"{details}"
+                ) from exc
+            raise
+    finally:
+        if cleanup_staging:
+            shutil.rmtree(staging_root, ignore_errors=True)
+
+    return paths
+
+
+def _write_csv_lf(table: pd.DataFrame, path: Path) -> None:
+    """Write one UTF-8 CSV with LF line endings and no index."""
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        table.to_csv(handle, index=False, lineterminator="\n")
+
+
+def _rollback_dataset_bundle(
+    backups: list[tuple[Path, Path]],
+    published: list[Path],
+) -> list[OSError]:
+    """Best-effort rollback after a multi-file bundle publication failure."""
+    errors: list[OSError] = []
+    for path in reversed(published):
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError as exc:
+            errors.append(exc)
+
+    for final_path, backup_path in reversed(backups):
+        try:
+            if backup_path.exists():
+                os.replace(backup_path, final_path)
+        except OSError as exc:
+            errors.append(exc)
+    return errors
 
 
 def download_file(

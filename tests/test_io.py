@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
 import pytest
 import requests
 
+import dms_parser.io as io_module
 from dms_parser.exceptions import DownloadError, FileFormatError
 from dms_parser.io import (
     download_file,
@@ -253,3 +255,168 @@ def test_ensure_local_copy_with_existing_file(tmp_path):
 
     result = ensure_local_copy(path, output_dir=tmp_path)
     assert result == path
+
+
+def _bundle_table() -> pd.DataFrame:
+    """Return a small standardized table for bundle publication tests."""
+    return pd.DataFrame(
+        {
+            "variant": ["M1A"],
+            "score_raw": [0.5],
+            "source_note": ["café"],
+        }
+    )
+
+
+def _bundle_summary(output_dir: Path) -> dict[str, object]:
+    """Return one successful summary row."""
+    return {
+        "source": "proteingym",
+        "input": "ASSAY_1",
+        "status": "OK",
+        "dataset_id": "ASSAY_1",
+        "target_protein": "P12345",
+        "wt_length": 3,
+        "raw_rows": 1,
+        "validated_rows": 1,
+        "discarded_rows": 0,
+        "output_rows": 1,
+        "wildtype_rows": 0,
+        "synthetic_wildtype_rows": 0,
+        "output_file": str(output_dir / "standardized.csv"),
+    }
+
+
+def test_dataset_bundle_overwrite_replaces_targets_and_preserves_unrelated(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "nested" / "output"
+    output_dir.mkdir(parents=True)
+    unrelated = output_dir / "notes.txt"
+    unrelated.write_text("preserve me", encoding="utf-8")
+    for name in ("standardized.csv", "summary.csv", "summary.json"):
+        (output_dir / name).write_text("obsolete", encoding="utf-8")
+
+    paths = io_module._publish_dataset_bundle(
+        _bundle_table(),
+        _bundle_summary(output_dir),
+        output_dir,
+        overwrite=True,
+    )
+
+    assert tuple(path.name for path in paths) == (
+        "standardized.csv",
+        "summary.csv",
+        "summary.json",
+    )
+    assert unrelated.read_text(encoding="utf-8") == "preserve me"
+    assert pd.read_csv(paths[0])["score_raw"].tolist() == [0.5]
+    assert pd.read_csv(paths[1])["status"].tolist() == ["OK"]
+    assert json.loads(paths[2].read_text(encoding="utf-8"))[0]["status"] == "OK"
+    for path in paths:
+        content = path.read_bytes()
+        assert content.endswith(b"\n")
+        assert not content.endswith(b"\n\n")
+        assert b"\r\n" not in content
+    assert b"caf\xc3\xa9" in paths[0].read_bytes()
+    assert list(output_dir.glob(".dms-parser-bundle-*")) == []
+
+
+@pytest.mark.parametrize(
+    "failed_target",
+    ["standardized.csv", "summary.csv", "summary.json"],
+)
+def test_dataset_bundle_publication_failure_restores_all_previous_targets(
+    failed_target: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    originals: dict[Path, bytes] = {}
+    for name in ("standardized.csv", "summary.csv", "summary.json"):
+        path = output_dir / name
+        content = f"original {name}".encode()
+        path.write_bytes(content)
+        originals[path] = content
+    unrelated = output_dir / "unrelated.txt"
+    unrelated.write_text("untouched", encoding="utf-8")
+    original_replace = io_module.os.replace
+    failure_injected = False
+
+    def fail_one_publication(source: str | Path, destination: str | Path) -> None:
+        nonlocal failure_injected
+        if Path(destination).name == failed_target and not failure_injected:
+            failure_injected = True
+            raise OSError(f"failed {failed_target}")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(io_module.os, "replace", fail_one_publication)
+
+    with pytest.raises(OSError, match=f"failed {failed_target}"):
+        io_module._publish_dataset_bundle(
+            _bundle_table(),
+            _bundle_summary(output_dir),
+            output_dir,
+            overwrite=True,
+        )
+
+    assert failure_injected is True
+    assert {path: path.read_bytes() for path in originals} == originals
+    assert unrelated.read_text(encoding="utf-8") == "untouched"
+    assert list(output_dir.glob(".dms-parser-bundle-*")) == []
+
+
+def test_failed_new_bundle_removes_earlier_publications(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    original_replace = io_module.os.replace
+    failure_injected = False
+
+    def fail_summary_publication(source: str | Path, destination: str | Path) -> None:
+        nonlocal failure_injected
+        if Path(destination).name == "summary.csv" and not failure_injected:
+            failure_injected = True
+            raise OSError("summary publication failed")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(io_module.os, "replace", fail_summary_publication)
+
+    with pytest.raises(OSError, match="summary publication failed"):
+        io_module._publish_dataset_bundle(
+            _bundle_table(),
+            _bundle_summary(output_dir),
+            output_dir,
+            overwrite=False,
+        )
+
+    assert failure_injected is True
+    assert all(
+        not (output_dir / name).exists()
+        for name in ("standardized.csv", "summary.csv", "summary.json")
+    )
+    assert list(output_dir.glob(".dms-parser-bundle-*")) == []
+
+
+def test_dataset_bundle_json_rejects_nan_before_publication(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    summary = _bundle_summary(output_dir)
+    summary["raw_rows"] = float("nan")
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        io_module._publish_dataset_bundle(
+            _bundle_table(),
+            summary,
+            output_dir,
+            overwrite=False,
+        )
+
+    assert all(
+        not (output_dir / name).exists()
+        for name in ("standardized.csv", "summary.csv", "summary.json")
+    )
+    assert list(output_dir.glob(".dms-parser-bundle-*")) == []

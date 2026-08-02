@@ -64,7 +64,12 @@ from dms_parser.transforms import (
     add_zscore,
     compute_wt_score,
 )
-from dms_parser.pipeline import PipelineResult, run_pipeline
+from dms_parser.pipeline import (
+    DatasetDownloadResult,
+    PipelineResult,
+    download_and_standardize_dataset,
+    run_pipeline,
+)
 from dms_parser.sources.mavedb_catalog import MaveDBCatalog
 from dms_parser.sources.proteingym_catalog import ProteinGymCatalog
 from dms_parser.sources.proteingym_resources import (
@@ -108,6 +113,8 @@ __all__ = [
     "validate_pipeline_config",
     "run_pipeline",
     "PipelineResult",
+    "download_and_standardize_dataset",
+    "DatasetDownloadResult",
     "FilesystemCache",
     "CacheManifest",
     "fetch_to_cache",

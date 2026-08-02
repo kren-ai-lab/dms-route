@@ -11,7 +11,12 @@ import pytest
 import requests
 
 import dms_parser.cli as cli_module
-from dms_parser import DatasetRecord, FilesystemCache, PipelineResult
+from dms_parser import (
+    DatasetDownloadResult,
+    DatasetRecord,
+    FilesystemCache,
+    PipelineResult,
+)
 from dms_parser.exceptions import (
     CatalogError,
     DatasetNotFoundError,
@@ -41,12 +46,16 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
 @pytest.mark.parametrize(
     ("arguments", "expected_text"),
     [
-        (["--help"], ("run", "list", "metadata")),
+        (["--help"], ("run", "list", "metadata", "download")),
         (["run", "--help"], ("--config", "--dry-run")),
         (["list", "--help"], ("--source", "--query", "--limit", "--format")),
         (["metadata", "--help"], ("--source", "--dataset-id", "--format")),
+        (
+            ["download", "--help"],
+            ("--source", "--dataset-id", "--output-dir", "--overwrite"),
+        ),
     ],
-    ids=("root", "run", "list", "metadata"),
+    ids=("root", "run", "list", "metadata", "download"),
 )
 def test_help_exits_successfully(
     arguments: list[str],
@@ -76,6 +85,33 @@ def test_help_exits_successfully(
         ["list", "--source", "mavedb", "--limit", "0"],
         ["list", "--source", "mavedb", "--limit", "not-an-integer"],
         ["list", "--source", "mavedb", "--offset", "-1"],
+        ["download"],
+        ["download", "--source", "mavedb"],
+        [
+            "download",
+            "--source",
+            "mavedb",
+            "--dataset-id",
+            "urn:mavedb:00000001-a-1",
+        ],
+        [
+            "download",
+            "--source",
+            "mavedb",
+            "--dataset-id",
+            "   ",
+            "--output-dir",
+            "output",
+        ],
+        [
+            "download",
+            "--source",
+            "mavedb",
+            "--dataset-id",
+            "urn:mavedb:00000001-a-1",
+            "--output-dir",
+            "   ",
+        ],
     ],
 )
 def test_invalid_usage_preserves_argparse_exit_status(
@@ -119,6 +155,13 @@ def test_run_forwards_explicit_arguments(
         "get_dataset_metadata",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("run invoked get_dataset_metadata")
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("run invoked download_and_standardize_dataset")
         ),
     )
     monkeypatch.setattr(
@@ -754,6 +797,236 @@ def test_catalog_log_level_and_json_stdout_are_separate(
     json.loads(capsys.readouterr().out)
     assert logging_calls[0]["level"] == logging.DEBUG
     assert "stream" not in logging_calls[0]
+
+
+def _download_result(output_dir: Path) -> DatasetDownloadResult:
+    """Return a successful download result rooted at ``output_dir``."""
+    return DatasetDownloadResult(
+        dataset_path=output_dir / "standardized.csv",
+        summary_csv_path=output_dir / "summary.csv",
+        summary_json_path=output_dir / "summary.json",
+        summary={"status": "OK"},
+    )
+
+
+def test_download_help_excludes_deferred_options(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(["download", "--help"])
+
+    assert exc_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "--variant-type" not in output
+    assert "--keep-failed" not in output
+
+
+@pytest.mark.parametrize(
+    ("source", "dataset_id"),
+    [
+        ("mavedb", "not-a-permanent-urn"),
+        ("mavedb", "urn:mavedb:00000001-a-0"),
+        ("proteingym", "ASSAY.csv"),
+        ("proteingym", "ASSAY.CSV"),
+    ],
+)
+def test_download_rejects_source_ids_before_side_effects(
+    source: str,
+    dataset_id: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Invalid dataset ID performed a side effect")
+
+    monkeypatch.setattr(cli_module, "FilesystemCache", forbidden)
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        forbidden,
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(
+            [
+                "download",
+                "--source",
+                source,
+                "--dataset-id",
+                dataset_id,
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not output_dir.exists()
+
+
+def test_download_forwards_defaults_and_uses_default_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cache_root = tmp_path / "home" / ".cache" / "dms-parser"
+    output_dir = tmp_path / "output"
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(cli_module, "_default_cache_root", lambda: cache_root)
+
+    def download(source: str, dataset_id: str, **kwargs: Any) -> DatasetDownloadResult:
+        calls.update(source=source, dataset_id=dataset_id, **kwargs)
+        return _download_result(kwargs["output_dir"])
+
+    monkeypatch.setattr(cli_module, "download_and_standardize_dataset", download)
+    monkeypatch.setattr(
+        cli_module,
+        "run_pipeline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("download invoked run_pipeline")
+        ),
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+    caplog.set_level(logging.INFO, logger="dms_parser.cli")
+
+    assert cli_module.main(
+        [
+            "download",
+            "--source",
+            "proteingym",
+            "--dataset-id",
+            "ASSAY_1",
+            "--output-dir",
+            str(output_dir),
+        ]
+    ) == 0
+
+    assert calls == {
+        "source": "proteingym",
+        "dataset_id": "ASSAY_1",
+        "output_dir": output_dir,
+        "cache": calls["cache"],
+        "refresh": False,
+        "drop_failed": False,
+        "add_wildtype_row": False,
+        "overwrite": False,
+    }
+    assert isinstance(calls["cache"], FilesystemCache)
+    assert calls["cache"].root == cache_root
+    assert not cache_root.exists()
+    assert capsys.readouterr().out == ""
+    assert "Dataset download completed" in caplog.text
+    assert str(output_dir / "standardized.csv") in caplog.text
+    assert str(output_dir / "summary.csv") in caplog.text
+    assert str(output_dir / "summary.json") in caplog.text
+
+
+def test_download_forwards_explicit_options_and_expands_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, Any] = {}
+    logging_calls: list[dict[str, Any]] = []
+    cache_dir = Path("~") / "download-cache"
+    output_dir = Path("~") / "download-output"
+
+    def download(source: str, dataset_id: str, **kwargs: Any) -> DatasetDownloadResult:
+        calls.update(source=source, dataset_id=dataset_id, **kwargs)
+        return _download_result(kwargs["output_dir"])
+
+    monkeypatch.setattr(cli_module, "download_and_standardize_dataset", download)
+    monkeypatch.setattr(
+        cli_module.logging,
+        "basicConfig",
+        lambda **kwargs: logging_calls.append(kwargs),
+    )
+
+    assert cli_module.main(
+        [
+            "download",
+            "--source",
+            "mavedb",
+            "--dataset-id",
+            "urn:mavedb:00000001-a-1",
+            "--output-dir",
+            str(output_dir),
+            "--cache-dir",
+            str(cache_dir),
+            "--refresh",
+            "--drop-failed",
+            "--add-wildtype-row",
+            "--overwrite",
+            "--log-level",
+            "DEBUG",
+        ]
+    ) == 0
+
+    assert calls["source"] == "mavedb"
+    assert calls["dataset_id"] == "urn:mavedb:00000001-a-1"
+    assert calls["output_dir"] == output_dir.expanduser()
+    assert calls["cache"].root == cache_dir.expanduser()
+    assert calls["refresh"] is True
+    assert calls["drop_failed"] is True
+    assert calls["add_wildtype_row"] is True
+    assert calls["overwrite"] is True
+    assert len(logging_calls) == 1
+    assert logging_calls[0]["level"] == logging.DEBUG
+    assert "stream" not in logging_calls[0]
+
+
+def test_expected_download_failure_returns_one_without_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            DatasetNotFoundError("missing")
+        ),
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(
+        [
+            "download",
+            "--source",
+            "proteingym",
+            "--dataset-id",
+            "MISSING",
+            "--output-dir",
+            "output",
+        ]
+    ) == 1
+    assert capsys.readouterr().out == ""
+
+
+def test_unexpected_download_exception_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cause = RuntimeError("unexpected")
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        lambda *args, **kwargs: (_ for _ in ()).throw(cause),
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli_module.main(
+            [
+                "download",
+                "--source",
+                "proteingym",
+                "--dataset-id",
+                "ASSAY_1",
+                "--output-dir",
+                "output",
+            ]
+        )
+
+    assert exc_info.value is cause
 
 
 def test_pyproject_registers_cli_entry_point() -> None:

@@ -8,12 +8,23 @@ from typing import Any
 
 import pandas as pd
 import pytest
+import requests
 
+import dms_parser.fetch as fetch_module
 import dms_parser.pipeline as pipeline_module
 from dms_parser import (
+    DatasetDownloadResult,
+    DatasetRecord,
+    FilesystemCache,
     InvalidPipelineOptionError,
     PipelineResult,
+    download_and_standardize_dataset,
+    get_proteingym_resource,
     run_pipeline,
+)
+from dms_parser.exceptions import DatasetNotFoundError
+from dms_parser.sources.proteingym_catalog import (
+    PROTEINGYM_SUBSTITUTIONS_CACHE_ID,
 )
 
 
@@ -557,3 +568,301 @@ def test_pipeline_logs_no_full_wt_sequence_or_url_secrets(
     assert wt_sequence not in caplog.text
     assert "authorization" not in caplog.text.casefold()
     assert "?" not in caplog.text
+
+
+def test_download_api_is_public() -> None:
+    assert download_and_standardize_dataset is (
+        pipeline_module.download_and_standardize_dataset
+    )
+    assert DatasetDownloadResult is pipeline_module.DatasetDownloadResult
+
+
+def test_download_collision_preflight_precedes_acquisition_and_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    existing = output_dir / "summary.csv"
+    existing.write_text("existing", encoding="utf-8")
+    cache = FilesystemCache(tmp_path / "cache")
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Collision preflight attempted acquisition")
+        ),
+    )
+
+    with pytest.raises(FileExistsError, match="overwrite=True"):
+        download_and_standardize_dataset(
+            "proteingym",
+            "ASSAY_1",
+            output_dir=output_dir,
+            cache=cache,
+        )
+
+    assert existing.read_text(encoding="utf-8") == "existing"
+    assert not cache.root.exists()
+    assert list(output_dir.iterdir()) == [existing]
+
+
+def test_unknown_download_publishes_no_error_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    monkeypatch.setattr(
+        pipeline_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            DatasetNotFoundError("missing")
+        ),
+    )
+
+    with pytest.raises(DatasetNotFoundError):
+        download_and_standardize_dataset(
+            "proteingym",
+            "MISSING",
+            output_dir=output_dir,
+            cache=FilesystemCache(tmp_path / "cache"),
+        )
+
+    assert not output_dir.exists()
+
+
+def test_mavedb_download_translates_metadata_404_to_dataset_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = requests.Response()
+    response.status_code = 404
+    error = requests.HTTPError("missing", response=response)
+    monkeypatch.setattr(
+        pipeline_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(DatasetNotFoundError, match="was not found"):
+        pipeline_module._get_mavedb_download_metadata(
+            "urn:mavedb:00000001-a-1"
+        )
+
+
+def test_proteingym_download_uses_shared_cached_benchmark_and_builds_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource = get_proteingym_resource("dms_substitutions")
+    metadata_source = tmp_path / "DMS_substitutions.csv"
+    benchmark_source = tmp_path / "DMS_substitutions.parquet"
+    pd.DataFrame(
+        {
+            "DMS_id": ["ASSAY_1", "ASSAY_2"],
+            "target_seq": ["MKT", "MKT"],
+            "UniProt_ID": ["P11111", "P22222"],
+            "molecule_name": ["Protein one", "Protein two"],
+            "gene": ["GENE1", "GENE2"],
+        }
+    ).to_csv(metadata_source, index=False)
+    pd.DataFrame(
+        {
+            "DMS_id": ["ASSAY_1", "ASSAY_1", "ASSAY_2"],
+            "mutant": ["WT", "M1A", "M1A"],
+            "DMS_score": [1.5, 0.5, 0.75],
+            "source_note": ["observed", "observed", "café"],
+        }
+    ).to_parquet(benchmark_source, index=False)
+    sources = {
+        resource.metadata_url: metadata_source,
+        resource.data_url: benchmark_source,
+    }
+    download_calls: list[str] = []
+
+    def offline_download(
+        url: str,
+        output_path: str | Path,
+        **kwargs: Any,
+    ) -> Path:
+        del kwargs
+        download_calls.append(url)
+        path = Path(output_path)
+        path.write_bytes(sources[url].read_bytes())
+        return path
+
+    monkeypatch.setattr(fetch_module, "download_file", offline_download)
+    cache = FilesystemCache(tmp_path / "cache")
+
+    first = download_and_standardize_dataset(
+        "proteingym",
+        "ASSAY_1",
+        output_dir=tmp_path / "first",
+        cache=cache,
+        add_wildtype_row=True,
+    )
+    second = download_and_standardize_dataset(
+        "proteingym",
+        "ASSAY_2",
+        output_dir=tmp_path / "second",
+        cache=cache,
+        add_wildtype_row=True,
+    )
+
+    assert download_calls == [resource.metadata_url, resource.data_url]
+    assert cache.exists("proteingym", PROTEINGYM_SUBSTITUTIONS_CACHE_ID)
+    benchmark_manifest = cache.load_manifest(
+        "proteingym",
+        pipeline_module._PROTEINGYM_SUBSTITUTIONS_BENCHMARK_CACHE_ID,
+    )
+    assert benchmark_manifest.original_url == resource.data_url
+    first_table = pd.read_csv(first.dataset_path)
+    second_table = pd.read_csv(second.dataset_path)
+    assert first_table["score_raw"].tolist() == [1.5, 0.5]
+    assert first_table["is_synthetic"].tolist() == [False, False]
+    assert int(first_table["is_wildtype"].sum()) == 1
+    assert second_table["score_raw"].iloc[1] == 0.75
+    assert pd.isna(second_table["score_raw"].iloc[0])
+    assert second_table["is_synthetic"].tolist() == [True, False]
+    assert "parsed_variant" in second_table.columns
+    assert "source_note" in second_table.columns
+    assert "score_log_ratio" not in second_table.columns
+    assert "score_binary_like" not in second_table.columns
+    assert second.summary["raw_rows"] == 1
+    assert second.summary["output_rows"] == 2
+    assert second.summary["validated_rows"] == 2
+    assert second.summary["discarded_rows"] == 0
+    assert second.summary["wildtype_rows"] == 1
+    assert second.summary["synthetic_wildtype_rows"] == 1
+    assert second.summary["output_file"] == str(second.dataset_path)
+    assert list(second.summary) == [
+        "source",
+        "input",
+        "status",
+        "dataset_id",
+        "target_protein",
+        "wt_length",
+        "raw_rows",
+        "validated_rows",
+        "discarded_rows",
+        "output_rows",
+        "wildtype_rows",
+        "synthetic_wildtype_rows",
+        "output_file",
+    ]
+    assert sorted(path.name for path in second.dataset_path.parent.iterdir()) == [
+        "standardized.csv",
+        "summary.csv",
+        "summary.json",
+    ]
+    assert b"caf\xc3\xa9" in second.dataset_path.read_bytes()
+    for path in (
+        second.dataset_path,
+        second.summary_csv_path,
+        second.summary_json_path,
+    ):
+        content = path.read_bytes()
+        assert content.endswith(b"\n")
+        assert not content.endswith(b"\n\n")
+        assert b"\r\n" not in content
+
+    refreshed = download_and_standardize_dataset(
+        "proteingym",
+        "ASSAY_1",
+        output_dir=tmp_path / "refreshed",
+        cache=cache,
+        refresh=True,
+    )
+    assert refreshed.summary["status"] == "OK"
+    assert download_calls == [
+        resource.metadata_url,
+        resource.data_url,
+        resource.metadata_url,
+        resource.data_url,
+    ]
+
+
+def test_mavedb_download_caches_scores_and_preserves_builder_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-1"
+    metadata = DatasetRecord(
+        source="mavedb",
+        dataset_id=dataset_id,
+        title="Non-ASCII assay",
+        target_id="GÉNE",
+        variant_type=None,
+        n_variants=2,
+        raw_metadata={
+            "urn": dataset_id,
+            "targetGenes": [{"name": "GÉNE"}],
+            "targetSequence": {"sequence": "MKT"},
+        },
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "get_dataset_metadata",
+        lambda source, requested_id: metadata,
+    )
+    download_calls: list[str] = []
+
+    def offline_download(
+        url: str,
+        output_path: str | Path,
+        **kwargs: Any,
+    ) -> Path:
+        del kwargs
+        download_calls.append(url)
+        path = Path(output_path)
+        path.write_text(
+            "hgvs_pro,score,source_note\n"
+            "p.Met1Ala,0.75,observed\n"
+            "p.invalid,-2.5,failed\n",
+            encoding="utf-8",
+        )
+        return path
+
+    monkeypatch.setattr(fetch_module, "download_file", offline_download)
+    cache = FilesystemCache(tmp_path / "cache")
+    first = download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "first",
+        cache=cache,
+    )
+    second = download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "second",
+        cache=cache,
+        drop_failed=True,
+        add_wildtype_row=True,
+    )
+
+    assert len(download_calls) == 1
+    assert cache.exists("mavedb", dataset_id)
+    first_table = pd.read_csv(first.dataset_path)
+    assert first_table["score_raw"].tolist() == [0.75, -2.5]
+    assert first_table["is_synthetic"].tolist() == [False, False]
+    assert first_table["status"].tolist() == ["OK", "Error"]
+    second_table = pd.read_csv(second.dataset_path)
+    assert second_table["is_synthetic"].tolist() == [True, False]
+    assert second_table["status"].tolist() == ["OK", "OK"]
+    assert second.summary["raw_rows"] == 2
+    assert second.summary["output_rows"] == 2
+    assert second.summary["discarded_rows"] == 1
+    assert second.summary["synthetic_wildtype_rows"] == 1
+    assert json.loads(second.summary_json_path.read_text(encoding="utf-8")) == [
+        second.summary
+    ]
+    assert "GÉNE" in second.summary_json_path.read_text(encoding="utf-8")
+
+    download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "refreshed",
+        cache=cache,
+        refresh=True,
+    )
+    assert len(download_calls) == 2

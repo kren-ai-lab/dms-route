@@ -8,22 +8,42 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
+from urllib.parse import quote
 
 import pandas as pd
 import requests
 
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
-from dms_parser.config import validate_pipeline_config
-from dms_parser.exceptions import InvalidPipelineOptionError
-from dms_parser.io import download_file, read_table, write_table
+from dms_parser.cache import FilesystemCache
+from dms_parser.catalog import DatasetRecord, get_dataset_metadata
+from dms_parser.config import validate_pipeline_config, validate_source_dataset_id
+from dms_parser.exceptions import (
+    DatasetNotFoundError,
+    InvalidDatasetError,
+    InvalidPipelineOptionError,
+    MissingWildTypeError,
+)
+from dms_parser.io import (
+    _preflight_dataset_bundle,
+    _publish_dataset_bundle,
+    download_file,
+    read_table,
+    write_table,
+)
 from dms_parser.parsing import translate_dna
+from dms_parser.sources.mavedb import download_mavedb_dataset
 from dms_parser.sources.mavedb_catalog import MAVEDB_API_URL
+from dms_parser.sources.proteingym import download_proteingym_dataset
 from dms_parser.sources.proteingym_resources import get_proteingym_resource
 
 logger = logging.getLogger(__name__)
 
 _PIPELINE_SOURCES = ("all", "proteingym", "mavedb")
+_PROTEINGYM_SUBSTITUTIONS_BENCHMARK_CACHE_ID = (
+    "resource-data-dms-substitutions"
+)
 
 
 @dataclass(frozen=True)
@@ -42,6 +62,273 @@ class PipelineResult:
     def exit_code(self) -> int:
         """Return the process exit code suitable for a command-line wrapper."""
         return 1 if self.has_errors else 0
+
+
+@dataclass(frozen=True)
+class DatasetDownloadResult:
+    """Stable output paths and summary for one standardized download."""
+
+    dataset_path: Path
+    summary_csv_path: Path
+    summary_json_path: Path
+    summary: dict[str, Any]
+
+
+def download_and_standardize_dataset(
+    source: str,
+    dataset_id: str,
+    *,
+    output_dir: str | Path,
+    cache: FilesystemCache,
+    refresh: bool = False,
+    drop_failed: bool = False,
+    add_wildtype_row: bool = False,
+    overwrite: bool = False,
+) -> DatasetDownloadResult:
+    """Download and standardize one substitutions dataset without YAML config."""
+    validate_source_dataset_id(source, dataset_id)
+    if not isinstance(output_dir, (str, Path)) or not str(output_dir).strip():
+        raise InvalidPipelineOptionError("output_dir must be a non-empty path.")
+    if not isinstance(cache, FilesystemCache):
+        raise InvalidPipelineOptionError("cache must be a FilesystemCache.")
+    for option_name, option_value in (
+        ("refresh", refresh),
+        ("drop_failed", drop_failed),
+        ("add_wildtype_row", add_wildtype_row),
+        ("overwrite", overwrite),
+    ):
+        if not isinstance(option_value, bool):
+            raise InvalidPipelineOptionError(
+                f"{option_name} must be a boolean."
+            )
+
+    resolved_output_dir = Path(output_dir).expanduser()
+    dataset_path, summary_csv_path, summary_json_path = (
+        _preflight_dataset_bundle(
+            resolved_output_dir,
+            overwrite=overwrite,
+        )
+    )
+
+    if source == "proteingym":
+        built_table, summary = _download_proteingym_dataset(
+            dataset_id,
+            cache=cache,
+            refresh=refresh,
+            drop_failed=drop_failed,
+            add_wildtype_row=add_wildtype_row,
+        )
+    else:
+        built_table, summary = _download_mavedb_dataset(
+            dataset_id,
+            cache=cache,
+            refresh=refresh,
+            drop_failed=drop_failed,
+            add_wildtype_row=add_wildtype_row,
+        )
+
+    summary["output_file"] = str(dataset_path)
+    _publish_dataset_bundle(
+        built_table,
+        summary,
+        resolved_output_dir,
+        overwrite=overwrite,
+    )
+    logger.info("Standardized dataset saved at: %s", dataset_path)
+    logger.info("CSV summary saved at: %s", summary_csv_path)
+    logger.info("JSON summary saved at: %s", summary_json_path)
+    return DatasetDownloadResult(
+        dataset_path=dataset_path,
+        summary_csv_path=summary_csv_path,
+        summary_json_path=summary_json_path,
+        summary=summary,
+    )
+
+
+def _download_proteingym_dataset(
+    dataset_id: str,
+    *,
+    cache: FilesystemCache,
+    refresh: bool,
+    drop_failed: bool,
+    add_wildtype_row: bool,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Acquire and build one ProteinGym substitutions assay."""
+    metadata_record = get_dataset_metadata(
+        "proteingym",
+        dataset_id,
+        variant_type="substitutions",
+        cache=cache,
+        refresh=refresh,
+    )
+    metadata = pd.Series(metadata_record.raw_metadata)
+    wt_sequence = _metadata_text(metadata, "target_seq")
+    if wt_sequence is None:
+        raise MissingWildTypeError(
+            f"No WT sequence found in ProteinGym metadata for {dataset_id}."
+        )
+
+    resource = get_proteingym_resource(
+        "dms_substitutions",
+        require_processing=True,
+    )
+    benchmark_path = download_proteingym_dataset(
+        resource.data_url,
+        cache=cache,
+        dataset_id=_PROTEINGYM_SUBSTITUTIONS_BENCHMARK_CACHE_ID,
+        refresh=refresh,
+    )
+    benchmark_table = read_table(benchmark_path)
+    if "DMS_id" not in benchmark_table.columns:
+        raise InvalidDatasetError(
+            "ProteinGym substitutions benchmark is missing the 'DMS_id' column."
+        )
+    experiment_table = benchmark_table[
+        benchmark_table["DMS_id"] == dataset_id
+    ].copy()
+    if experiment_table.empty:
+        raise DatasetNotFoundError(
+            f"ProteinGym dataset {dataset_id!r} was not found in the benchmark."
+        )
+
+    protein_id = _metadata_text(metadata, "molecule_name")
+    gene = _metadata_text(metadata, "gene", "Gene", "gene_name")
+    uniprot_id = _metadata_text(metadata, "UniProt_ID")
+    with TemporaryDirectory(prefix="dms-parser-download-") as temporary_dir:
+        selected_path = Path(temporary_dir) / "selected.csv"
+        write_table(experiment_table, selected_path, index=False)
+        built_table = build_proteingym_dataset(
+            input_path=selected_path,
+            score_col="DMS_score",
+            variant_col="mutant",
+            dataset_id=dataset_id,
+            protein_id=protein_id,
+            gene=gene,
+            uniprot_id=uniprot_id,
+            wt_sequence=wt_sequence,
+            add_relative_score=False,
+            add_binary_label=False,
+            add_wildtype_row=add_wildtype_row,
+            drop_failed=drop_failed,
+            validate_output=True,
+            require_wt_for_transforms=False,
+        )
+
+    return built_table, _successful_download_summary(
+        source="proteingym",
+        dataset_id=dataset_id,
+        target_protein=uniprot_id or protein_id or "Unknown",
+        wt_sequence=wt_sequence,
+        raw_rows=len(experiment_table),
+        built_table=built_table,
+    )
+
+
+def _download_mavedb_dataset(
+    dataset_id: str,
+    *,
+    cache: FilesystemCache,
+    refresh: bool,
+    drop_failed: bool,
+    add_wildtype_row: bool,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Acquire and build one MaveDB substitutions score set."""
+    metadata_record = _get_mavedb_download_metadata(dataset_id)
+    metadata = metadata_record.raw_metadata
+    wt_sequence = _extract_wt_from_metadata(metadata)
+    if wt_sequence is None:
+        raise MissingWildTypeError(
+            f"No WT sequence found in MaveDB metadata for {dataset_id}."
+        )
+
+    encoded_id = quote(dataset_id, safe=":")
+    scores_url = (
+        f"{MAVEDB_API_URL.rstrip('/')}/score-sets/{encoded_id}/scores"
+    )
+    scores_path = download_mavedb_dataset(
+        scores_url,
+        cache=cache,
+        dataset_id=dataset_id,
+        refresh=refresh,
+    )
+    raw_table = read_table(scores_path)
+    hgvs_col = next(
+        (column for column in ("hgvs_pro",) if column in raw_table.columns),
+        None,
+    )
+    score_col = next(
+        (
+            column
+            for column in ("score", "DMS_score", "fitness")
+            if column in raw_table.columns
+        ),
+        None,
+    )
+    if hgvs_col is None or score_col is None:
+        raise InvalidDatasetError(
+            "Neither score nor HGVS columns were detected in the MaveDB table."
+        )
+
+    gene = _mavedb_gene(metadata)
+    uniprot_id = _mavedb_uniprot_id(metadata)
+    built_table = build_mavedb_dataset(
+        input_path=scores_path,
+        score_col=score_col,
+        hgvs_col=hgvs_col,
+        dataset_id=dataset_id,
+        protein_id=None,
+        gene=gene,
+        uniprot_id=uniprot_id,
+        wt_sequence=wt_sequence,
+        add_relative_score=False,
+        add_binary_label=False,
+        add_wildtype_row=add_wildtype_row,
+        drop_failed=drop_failed,
+        validate_output=True,
+        require_wt_for_transforms=False,
+    )
+    return built_table, _successful_download_summary(
+        source="mavedb",
+        dataset_id=dataset_id,
+        target_protein=_mavedb_target_protein(metadata, gene),
+        wt_sequence=wt_sequence,
+        raw_rows=len(raw_table),
+        built_table=built_table,
+    )
+
+
+def _get_mavedb_download_metadata(dataset_id: str) -> DatasetRecord:
+    """Retrieve MaveDB metadata and normalize an HTTP 404 as not found."""
+    try:
+        return get_dataset_metadata("mavedb", dataset_id)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            raise DatasetNotFoundError(
+                f"MaveDB dataset {dataset_id!r} was not found."
+            ) from exc
+        raise
+
+
+def _successful_download_summary(
+    *,
+    source: str,
+    dataset_id: str,
+    target_protein: str,
+    wt_sequence: str,
+    raw_rows: int,
+    built_table: pd.DataFrame,
+) -> dict[str, Any]:
+    """Build the existing successful summary representation for one dataset."""
+    return {
+        "source": source,
+        "input": dataset_id,
+        "status": "OK",
+        "dataset_id": dataset_id,
+        "target_protein": target_protein,
+        "wt_length": len(wt_sequence),
+        "raw_rows": raw_rows,
+        **_completed_dataset_counts(built_table, raw_rows=raw_rows),
+    }
 
 
 def run_pipeline(
