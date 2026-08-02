@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Mapping
@@ -11,8 +10,6 @@ from dms_parser.exceptions import (
     UnknownSourceResourceError,
     UnsupportedSourceResourceError,
 )
-
-logger = logging.getLogger(__name__)
 
 ProteinGymCollection = Literal["dms", "clinical"]
 ProteinGymVariantType = Literal["substitutions", "indels"]

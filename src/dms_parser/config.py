@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from pathlib import Path
 from typing import Any, cast
@@ -12,8 +11,6 @@ from dms_parser.sources.proteingym_resources import (
     ProteinGymResource,
     get_proteingym_resource,
 )
-
-logger = logging.getLogger(__name__)
 
 _MAVEDB_SCORE_SET_URN_PATTERN = re.compile(
     r"urn:mavedb:[0-9]{8}-(?:[a-z]+|0)-[1-9][0-9]*"

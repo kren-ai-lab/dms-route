@@ -18,17 +18,17 @@ import requests
 from dms_parser.cache import FilesystemCache
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
 from dms_parser.config import load_pipeline_config, validate_source_dataset_id
+from dms_parser.downloads import (
+    _validate_dataset_batch_request,
+    download_and_standardize_dataset,
+    download_and_standardize_datasets,
+)
 from dms_parser.exceptions import (
     DMSParserError,
     InvalidPipelineOptionError,
     SourceConfigurationError,
 )
-from dms_parser.pipeline import (
-    _validate_dataset_batch_request,
-    download_and_standardize_dataset,
-    download_and_standardize_datasets,
-    run_pipeline,
-)
+from dms_parser.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
 

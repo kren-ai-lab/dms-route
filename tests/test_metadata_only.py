@@ -3,13 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 import dms_parser.fetch as fetch_module
 import dms_parser.pipeline as pipeline_module
 import dms_parser.sources.mavedb as mavedb_module
 import dms_parser.sources.proteingym as proteingym_module
 from dms_parser import get_proteingym_resource
+from tests._factories import standardized_table
 
 
 def _forbid_skipped_operations(monkeypatch) -> None:
@@ -49,13 +49,6 @@ class MetadataResponse:
     def json(self) -> dict:
         """Return the configured metadata object."""
         return self._metadata
-
-
-def _mock_built_table() -> pd.DataFrame:
-    """Return the standardized columns needed by pipeline accounting."""
-    return pd.DataFrame(
-        {"status": ["OK"], "is_wildtype": [False], "is_synthetic": [False]}
-    )
 
 
 def test_mavedb_metadata_only_skips_dataset_acquisition(
@@ -209,7 +202,7 @@ def test_normal_mavedb_execution_keeps_existing_acquisition_path(
 
     def build_dataset(**kwargs):
         builder_calls.append(kwargs)
-        return _mock_built_table()
+        return standardized_table()
 
     monkeypatch.setattr(pipeline_module.requests, "get", source_request)
     monkeypatch.setattr(
@@ -347,7 +340,7 @@ def test_normal_proteingym_execution_keeps_existing_acquisition_path(
 
     def build_dataset(**kwargs):
         builder_calls.append(kwargs)
-        return _mock_built_table()
+        return standardized_table()
 
     monkeypatch.setattr(pipeline_module, "download_file", offline_download)
     monkeypatch.setattr(pipeline_module, "read_table", offline_read)

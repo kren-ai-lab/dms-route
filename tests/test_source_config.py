@@ -26,6 +26,7 @@ from dms_parser.sources.proteingym_catalog import (
     PROTEINGYM_SUBSTITUTIONS_URL,
     ProteinGymCatalog,
 )
+from tests._factories import standardized_table
 
 CONFIG_PATH = Path(__file__).parents[1] / "examples" / "pipeline.yml"
 
@@ -146,12 +147,6 @@ EXPECTED_RESOURCES = {
     },
 }
 
-
-def _mock_built_table() -> pd.DataFrame:
-    """Return the standardized columns needed by pipeline accounting."""
-    return pd.DataFrame(
-        {"status": ["OK"], "is_wildtype": [False], "is_synthetic": [False]}
-    )
 
 def test_registry_contains_exact_official_resources() -> None:
     resources = list_proteingym_resources()
@@ -558,7 +553,7 @@ def test_mavedb_gene_and_display_fallback_are_separate(
 
     def build_dataset(**kwargs: Any) -> pd.DataFrame:
         builder_calls.append(kwargs)
-        return _mock_built_table()
+        return standardized_table()
 
     monkeypatch.setattr(pipeline_module.requests, "get", source_request)
     monkeypatch.setattr(

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 from dms_parser.sources.mavedb import (
     download_mavedb_dataset,
     ensure_local_copy as ensure_local_mavedb_copy,
@@ -24,8 +22,6 @@ from dms_parser.sources.proteingym_resources import (
     get_proteingym_resource,
     list_proteingym_resources,
 )
-
-logger = logging.getLogger(__name__)
 
 __all__ = [
     "MaveDBCatalog",

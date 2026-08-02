@@ -8,6 +8,13 @@ from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
 from dms_parser.cache import CacheManifest, FilesystemCache
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
 from dms_parser.config import load_pipeline_config, validate_pipeline_config
+from dms_parser.downloads import (
+    DatasetBatchDownloadEntry,
+    DatasetBatchDownloadResult,
+    DatasetDownloadResult,
+    download_and_standardize_dataset,
+    download_and_standardize_datasets,
+)
 from dms_parser.exceptions import (
     CacheError,
     CatalogError,
@@ -64,15 +71,7 @@ from dms_parser.transforms import (
     add_zscore,
     compute_wt_score,
 )
-from dms_parser.pipeline import (
-    DatasetBatchDownloadEntry,
-    DatasetBatchDownloadResult,
-    DatasetDownloadResult,
-    PipelineResult,
-    download_and_standardize_dataset,
-    download_and_standardize_datasets,
-    run_pipeline,
-)
+from dms_parser.pipeline import PipelineResult, run_pipeline
 from dms_parser.sources.mavedb_catalog import MaveDBCatalog
 from dms_parser.sources.proteingym_catalog import ProteinGymCatalog
 from dms_parser.sources.proteingym_resources import (

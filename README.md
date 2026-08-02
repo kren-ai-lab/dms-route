@@ -111,6 +111,7 @@ dms-parser run --help
 dms-parser list --help
 dms-parser metadata --help
 dms-parser download --help
+dms-parser download-many --help
 ```
 
 The CLI logs at `INFO` by default; pass `--log-level DEBUG` for diagnostic
@@ -367,9 +368,9 @@ raise SystemExit(result.exit_code)
 ```
 
 `config.py` owns YAML loading and structural validation. `pipeline.py` owns
-ProteinGym and MaveDB orchestration, dataset output, and combined summaries.
-The installed `dms-parser run` command is a command-line adapter over these
-public APIs.
+configuration-driven ProteinGym and MaveDB execution and combined summaries.
+`downloads.py` owns independent single- and multi-dataset standardized
+downloads. The installed CLI commands are adapters over these public APIs.
 
 ---
 
@@ -441,6 +442,7 @@ dms_parser/
 ├── catalog.py         # Common metadata records and source dispatch
 ├── cli.py             # Installed command-line interface
 ├── config.py          # Pipeline YAML loading and validation
+├── downloads.py       # Standardized single and batch downloads
 ├── fetch.py           # Cache-aware staged downloads
 ├── pipeline.py        # Configuration-driven source orchestration
 ├── parsing.py         # Variant parsing logic

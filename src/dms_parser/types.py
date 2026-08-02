@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import logging
-from typing import Any, Literal, Optional, TypedDict
-
-logger = logging.getLogger(__name__)
+from typing import Literal, Optional, TypedDict
 
 
 class ParsedVariantToken(TypedDict):
@@ -45,5 +42,4 @@ class ParsedMaveDBHGVSRecord(TypedDict):
     mutations: Optional[list[tuple[str, int, str]]]
 
 
-MetadataDict = dict[str, Any]
 MutationTuple = tuple[str, int, str]

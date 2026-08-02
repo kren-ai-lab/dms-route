@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Iterable
 
 import pandas as pd
 
 from dms_parser.exceptions import InvalidDatasetError, MissingWildTypeError, SequenceValidationError
-
-logger = logging.getLogger(__name__)
-
 
 def validate_required_columns(
     df: pd.DataFrame,

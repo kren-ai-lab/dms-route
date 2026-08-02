@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Any
 
@@ -33,9 +32,6 @@ from dms_parser.types import (
     ParsedVariant,
     ParsedVariantToken,
 )
-
-logger = logging.getLogger(__name__)
-
 
 def _normalize_variant_string(variant: Any) -> str:
     """Normalize a raw variant value into a clean string."""
