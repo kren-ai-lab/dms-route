@@ -182,6 +182,70 @@ substitutions benchmark before selecting one assay. Indels are not supported,
 and MaveDB datasets with nonstandard score/HGVS columns or no recoverable WT
 sequence may remain unsupported.
 
+### Download and standardize several datasets
+
+`download-many` processes several substitutions datasets from one source in
+request order, without `pipeline.yml`. Repeat the singular `--dataset-id`
+option once per dataset:
+
+```bash
+dms-parser download-many \
+    --source proteingym \
+    --dataset-id BRCA1_HUMAN_Findlay_2018 \
+    --dataset-id PTEN_HUMAN_Mighell_2018 \
+    --output-dir datasets
+
+dms-parser download-many \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000097-a-1 \
+    --dataset-id urn:mavedb:00000100-a-1 \
+    --output-dir datasets
+```
+
+Each ID receives a portable deterministic directory beneath the source. The
+directory name starts with `id-`, contains a sanitized form of the original
+ID, and ends with a short SHA-256 digest. The original ID remains in every
+aggregate record.
+
+```text
+<output-dir>/
+|-- download-summary.csv
+|-- download-summary.json
+`-- <source>/
+    |-- <portable-id-1>/
+    |   |-- standardized.csv
+    |   |-- summary.csv
+    |   `-- summary.json
+    `-- <portable-id-2>/
+        |-- standardized.csv
+        |-- summary.csv
+        `-- summary.json
+```
+
+Expected per-dataset failures are recorded as `ERROR` and processing continues;
+successful records use `SUCCESS`. The aggregate CSV and JSON preserve request
+order and contain the source, original ID, relative output paths, successful
+row counts, and the expected error type and message when processing fails.
+Their ordered fields are `source`, `dataset_id`, `status`, `output_dir`,
+`dataset_path`, `summary_csv_path`, `summary_json_path`, `target_protein`,
+`wt_length`, `raw_rows`, `validated_rows`, `discarded_rows`, `output_rows`,
+`wildtype_rows`, `synthetic_wildtype_rows`, `error_type`, and `error`.
+Exit code `0` means every dataset succeeded, `1` means an expected operational
+failure occurred, and `2` indicates invalid command usage.
+
+The default cache is `~/.cache/dms-parser`; `--cache-dir` changes it.
+`--refresh` reacquires each MaveDB score artifact and reacquires the shared
+ProteinGym substitutions reference and Parquet once per batch. `--overwrite`
+replaces only the three deterministic files in each rebuilt dataset bundle and
+the two aggregate summary files. Unrelated files and old bundles whose rebuild
+fails before publication are preserved, while successful bundles remain after
+another requested dataset fails.
+
+As with single download, no score transformations are applied, original source
+columns are retained, and only substitutions are supported. ProteinGym may
+load the complete substitutions benchmark once for the batch. Existing MaveDB
+WT and score/HGVS-column limitations still apply.
+
 ---
 
 ## ⚙️ Requirements

@@ -65,9 +65,12 @@ from dms_parser.transforms import (
     compute_wt_score,
 )
 from dms_parser.pipeline import (
+    DatasetBatchDownloadEntry,
+    DatasetBatchDownloadResult,
     DatasetDownloadResult,
     PipelineResult,
     download_and_standardize_dataset,
+    download_and_standardize_datasets,
     run_pipeline,
 )
 from dms_parser.sources.mavedb_catalog import MaveDBCatalog
@@ -115,6 +118,9 @@ __all__ = [
     "PipelineResult",
     "download_and_standardize_dataset",
     "DatasetDownloadResult",
+    "download_and_standardize_datasets",
+    "DatasetBatchDownloadEntry",
+    "DatasetBatchDownloadResult",
     "FilesystemCache",
     "CacheManifest",
     "fetch_to_cache",

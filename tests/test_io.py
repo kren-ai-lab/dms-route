@@ -420,3 +420,177 @@ def test_dataset_bundle_json_rejects_nan_before_publication(
         for name in ("standardized.csv", "summary.csv", "summary.json")
     )
     assert list(output_dir.glob(".dms-parser-bundle-*")) == []
+
+
+def _aggregate_records() -> list[dict[str, object]]:
+    """Return ordered success and failure records for aggregate tests."""
+    columns = (
+        "source",
+        "dataset_id",
+        "status",
+        "output_dir",
+        "dataset_path",
+        "summary_csv_path",
+        "summary_json_path",
+        "target_protein",
+        "wt_length",
+        "raw_rows",
+        "validated_rows",
+        "discarded_rows",
+        "output_rows",
+        "wildtype_rows",
+        "synthetic_wildtype_rows",
+        "error_type",
+        "error",
+    )
+    success = dict.fromkeys(columns)
+    success.update(
+        {
+            "source": "proteingym",
+            "dataset_id": "ASSAY_1",
+            "status": "SUCCESS",
+            "output_dir": "proteingym/id-ASSAY_1--digest",
+            "dataset_path": "proteingym/id-ASSAY_1--digest/standardized.csv",
+            "summary_csv_path": "proteingym/id-ASSAY_1--digest/summary.csv",
+            "summary_json_path": "proteingym/id-ASSAY_1--digest/summary.json",
+            "target_protein": "caf\u00e9",
+            "wt_length": 3,
+            "raw_rows": 1,
+            "validated_rows": 1,
+            "discarded_rows": 0,
+            "output_rows": 1,
+            "wildtype_rows": 0,
+            "synthetic_wildtype_rows": 0,
+        }
+    )
+    failure = dict.fromkeys(columns)
+    failure.update(
+        {
+            "source": "proteingym",
+            "dataset_id": "MISSING",
+            "status": "ERROR",
+            "output_dir": "proteingym/id-MISSING--digest",
+            "error_type": "DatasetNotFoundError",
+            "error": "missing",
+        }
+    )
+    return [success, failure]
+
+
+def test_download_summary_publication_contract_and_overwrite(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    unrelated = output_dir / "notes.txt"
+    unrelated.write_text("preserve", encoding="utf-8")
+    for name in ("download-summary.csv", "download-summary.json"):
+        (output_dir / name).write_text("obsolete", encoding="utf-8")
+
+    csv_path, json_path = io_module._publish_download_summary(
+        _aggregate_records(),
+        output_dir,
+        overwrite=True,
+    )
+
+    csv_table = pd.read_csv(csv_path)
+    assert csv_table.columns.tolist() == list(_aggregate_records()[0])
+    assert csv_table["status"].tolist() == ["SUCCESS", "ERROR"]
+    assert json.loads(json_path.read_text(encoding="utf-8")) == (
+        _aggregate_records()
+    )
+    assert b"caf\xc3\xa9" in json_path.read_bytes()
+    for path in (csv_path, json_path):
+        content = path.read_bytes()
+        assert content.endswith(b"\n")
+        assert not content.endswith(b"\n\n")
+        assert b"\r\n" not in content
+    assert unrelated.read_text(encoding="utf-8") == "preserve"
+    assert list(output_dir.glob(".dms-parser-download-summary-*")) == []
+
+
+@pytest.mark.parametrize(
+    "failed_target",
+    ["download-summary.csv", "download-summary.json"],
+)
+def test_download_summary_failure_restores_previous_targets(
+    failed_target: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    originals: dict[Path, bytes] = {}
+    for name in ("download-summary.csv", "download-summary.json"):
+        path = output_dir / name
+        content = f"original {name}".encode()
+        path.write_bytes(content)
+        originals[path] = content
+    original_replace = io_module.os.replace
+    failure_injected = False
+
+    def fail_one_publication(source: str | Path, destination: str | Path) -> None:
+        nonlocal failure_injected
+        if Path(destination).name == failed_target and not failure_injected:
+            failure_injected = True
+            raise OSError(f"failed {failed_target}")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(io_module.os, "replace", fail_one_publication)
+
+    with pytest.raises(OSError, match=f"failed {failed_target}"):
+        io_module._publish_download_summary(
+            _aggregate_records(),
+            output_dir,
+            overwrite=True,
+        )
+
+    assert failure_injected is True
+    assert {path: path.read_bytes() for path in originals} == originals
+    assert list(output_dir.glob(".dms-parser-download-summary-*")) == []
+
+
+def test_new_download_summary_failure_removes_earlier_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    original_replace = io_module.os.replace
+    failure_injected = False
+
+    def fail_json_publication(source: str | Path, destination: str | Path) -> None:
+        nonlocal failure_injected
+        if Path(destination).name == "download-summary.json" and not failure_injected:
+            failure_injected = True
+            raise OSError("aggregate publication failed")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(io_module.os, "replace", fail_json_publication)
+
+    with pytest.raises(OSError, match="aggregate publication failed"):
+        io_module._publish_download_summary(
+            _aggregate_records(),
+            output_dir,
+            overwrite=False,
+        )
+
+    assert failure_injected is True
+    assert not (output_dir / "download-summary.csv").exists()
+    assert not (output_dir / "download-summary.json").exists()
+    assert list(output_dir.glob(".dms-parser-download-summary-*")) == []
+
+
+def test_download_summary_rejects_nan_before_publication(tmp_path: Path) -> None:
+    records = _aggregate_records()
+    records[0]["raw_rows"] = float("nan")
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        io_module._publish_download_summary(
+            records,
+            output_dir,
+            overwrite=False,
+        )
+
+    assert not (output_dir / "download-summary.csv").exists()
+    assert not (output_dir / "download-summary.json").exists()

@@ -18,8 +18,17 @@ import requests
 from dms_parser.cache import FilesystemCache
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
 from dms_parser.config import load_pipeline_config, validate_source_dataset_id
-from dms_parser.exceptions import DMSParserError, SourceConfigurationError
-from dms_parser.pipeline import download_and_standardize_dataset, run_pipeline
+from dms_parser.exceptions import (
+    DMSParserError,
+    InvalidPipelineOptionError,
+    SourceConfigurationError,
+)
+from dms_parser.pipeline import (
+    _validate_dataset_batch_request,
+    download_and_standardize_dataset,
+    download_and_standardize_datasets,
+    run_pipeline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +88,21 @@ def _non_empty_path(value: str) -> Path:
     if not value.strip():
         raise argparse.ArgumentTypeError("must be a non-empty path")
     return Path(value)
+
+
+def _batch_dataset_id(value: str) -> str:
+    """Reject whitespace and control characters in a batch dataset ID."""
+    _non_empty_dataset_id(value)
+    if value != value.strip():
+        raise argparse.ArgumentTypeError(
+            "must not have leading or trailing whitespace"
+        )
+    if any(
+        ord(character) < 32 or 127 <= ord(character) <= 159
+        for character in value
+    ):
+        raise argparse.ArgumentTypeError("must not contain control characters")
+    return value
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -179,6 +203,42 @@ def _build_parser() -> argparse.ArgumentParser:
     download_parser.set_defaults(
         handler=_download_command,
         command_parser=download_parser,
+    )
+
+    download_many_parser = subparsers.add_parser(
+        "download-many",
+        help="Download and standardize several substitutions datasets.",
+    )
+    download_many_parser.add_argument(
+        "--source",
+        choices=_CATALOG_SOURCES,
+        required=True,
+    )
+    download_many_parser.add_argument(
+        "--dataset-id",
+        action="append",
+        required=True,
+        type=_batch_dataset_id,
+    )
+    download_many_parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=_non_empty_path,
+    )
+    download_many_parser.add_argument("--cache-dir", type=_non_empty_path)
+    download_many_parser.add_argument("--refresh", action="store_true")
+    download_many_parser.add_argument("--drop-failed", action="store_true")
+    download_many_parser.add_argument("--add-wildtype-row", action="store_true")
+    download_many_parser.add_argument("--overwrite", action="store_true")
+    download_many_parser.add_argument(
+        "--log-level",
+        choices=_LOG_LEVELS,
+        default="INFO",
+        help="Set the process logging level (default: INFO).",
+    )
+    download_many_parser.set_defaults(
+        handler=_download_many_command,
+        command_parser=download_many_parser,
     )
     return parser
 
@@ -309,6 +369,56 @@ def _download_command(args: argparse.Namespace) -> int:
         result.summary_json_path,
     )
     return 0
+
+
+def _download_many_command(args: argparse.Namespace) -> int:
+    """Download and standardize an ordered batch from one source."""
+    output_dir = args.output_dir.expanduser()
+    try:
+        _validate_dataset_batch_request(
+            args.source,
+            args.dataset_id,
+            output_dir=output_dir,
+            refresh=args.refresh,
+            drop_failed=args.drop_failed,
+            add_wildtype_row=args.add_wildtype_row,
+            overwrite=args.overwrite,
+        )
+    except (SourceConfigurationError, InvalidPipelineOptionError) as exc:
+        args.command_parser.error(str(exc))
+    except OSError as exc:
+        logger.error("Dataset batch preflight failed: %s", exc)
+        return 1
+
+    cache_root = (
+        args.cache_dir.expanduser()
+        if args.cache_dir is not None
+        else _default_cache_root()
+    )
+    try:
+        result = download_and_standardize_datasets(
+            args.source,
+            args.dataset_id,
+            output_dir=output_dir,
+            cache=FilesystemCache(cache_root),
+            refresh=args.refresh,
+            drop_failed=args.drop_failed,
+            add_wildtype_row=args.add_wildtype_row,
+            overwrite=args.overwrite,
+        )
+    except (DMSParserError, requests.RequestException, OSError) as exc:
+        logger.error("Dataset batch download failed: %s", exc)
+        return 1
+
+    logger.info(
+        "Dataset batch completed successes=%d failures=%d summary_csv=%s "
+        "summary_json=%s",
+        result.success_count,
+        result.failure_count,
+        result.summary_csv_path,
+        result.summary_json_path,
+    )
+    return result.exit_code
 
 
 def _catalog_cache(args: argparse.Namespace) -> FilesystemCache | None:

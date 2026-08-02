@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 _DATASET_FILENAME = "standardized.csv"
 _SUMMARY_CSV_FILENAME = "summary.csv"
 _SUMMARY_JSON_FILENAME = "summary.json"
+_DOWNLOAD_SUMMARY_CSV_FILENAME = "download-summary.csv"
+_DOWNLOAD_SUMMARY_JSON_FILENAME = "download-summary.json"
+
+
+class _IncompletePublicationRollbackError(OSError):
+    """Raised when recovery files must be retained after rollback failure."""
 
 
 def _dataset_bundle_paths(output_dir: str | Path) -> tuple[Path, Path, Path]:
@@ -62,6 +68,76 @@ def _preflight_dataset_bundle(
     return paths
 
 
+def _preflight_download_batch(
+    output_dir: str | Path,
+    dataset_dirs: tuple[Path, ...],
+    *,
+    overwrite: bool,
+) -> tuple[Path, Path]:
+    """Preflight aggregate and per-dataset targets without side effects."""
+    root = Path(output_dir)
+    required_directories = {root}
+    required_directories.update(path.parent for path in dataset_dirs)
+    required_directories.update(dataset_dirs)
+    for path in tuple(required_directories):
+        required_directories.update(path.parents)
+    invalid_directories = [
+        path
+        for path in required_directories
+        if path.exists() and not path.is_dir()
+    ]
+    if invalid_directories:
+        joined = ", ".join(
+            str(path)
+            for path in sorted(invalid_directories, key=str)
+        )
+        raise NotADirectoryError(
+            f"Batch output paths must be directories: {joined}"
+        )
+
+    summary_paths = _download_summary_paths(root)
+    _preflight_output_files(
+        summary_paths,
+        overwrite=overwrite,
+        description="Batch summary output",
+    )
+    for dataset_dir in dataset_dirs:
+        _preflight_dataset_bundle(dataset_dir, overwrite=overwrite)
+    return summary_paths
+
+
+def _download_summary_paths(output_dir: str | Path) -> tuple[Path, Path]:
+    """Return deterministic aggregate summary paths for a download batch."""
+    root = Path(output_dir)
+    return (
+        root / _DOWNLOAD_SUMMARY_CSV_FILENAME,
+        root / _DOWNLOAD_SUMMARY_JSON_FILENAME,
+    )
+
+
+def _preflight_output_files(
+    paths: tuple[Path, ...],
+    *,
+    overwrite: bool,
+    description: str,
+) -> None:
+    """Validate deterministic output files without creating anything."""
+    if not overwrite:
+        existing = [path for path in paths if path.exists()]
+        if existing:
+            joined = ", ".join(str(path) for path in existing)
+            raise FileExistsError(
+                f"{description} already exists; use overwrite=True: {joined}"
+            )
+        return
+    invalid = [path for path in paths if path.exists() and not path.is_file()]
+    if invalid:
+        joined = ", ".join(str(path) for path in invalid)
+        raise IsADirectoryError(
+            f"{description} targets must be regular files: {joined}"
+        )
+
+
 def _publish_dataset_bundle(
     dataset: pd.DataFrame,
     summary: dict[str, Any],
@@ -97,41 +173,110 @@ def _publish_dataset_bundle(
             )
 
         _preflight_dataset_bundle(output_dir, overwrite=overwrite)
-        backups: list[tuple[Path, Path]] = []
-        published: list[Path] = []
         try:
-            for index, (staged_path, final_path) in enumerate(
-                zip(staged_paths, paths, strict=True)
-            ):
-                if final_path.exists():
-                    if not overwrite:
-                        raise FileExistsError(
-                            "Dataset output appeared during publication: "
-                            f"{final_path}"
-                        )
-                    backup_path = staging_root / f"backup-{index}-{final_path.name}"
-                    os.replace(final_path, backup_path)
-                    backups.append((final_path, backup_path))
-                os.replace(staged_path, final_path)
-                published.append(final_path)
-        except OSError as exc:
-            rollback_errors = _rollback_dataset_bundle(backups, published)
-            if rollback_errors:
-                # Retain any surviving backups when rollback cannot fully restore
-                # the original bundle; the exception identifies their location.
-                cleanup_staging = False
-                details = "; ".join(str(error) for error in rollback_errors)
-                raise OSError(
-                    f"Dataset output publication failed and rollback was "
-                    f"incomplete; recovery files remain in {staging_root}: "
-                    f"{details}"
-                ) from exc
-            raise
+            _publish_staged_files(
+                staged_paths,
+                paths,
+                staging_root=staging_root,
+                overwrite=overwrite,
+                description="Dataset output",
+            )
+        except _IncompletePublicationRollbackError as exc:
+            cleanup_staging = False
+            raise OSError(str(exc)) from exc.__cause__
     finally:
         if cleanup_staging:
             shutil.rmtree(staging_root, ignore_errors=True)
 
     return paths
+
+
+def _publish_download_summary(
+    records: list[dict[str, Any]],
+    output_dir: str | Path,
+    *,
+    overwrite: bool,
+) -> tuple[Path, Path]:
+    """Stage and publish the two aggregate download summary files."""
+    output_dir = Path(output_dir)
+    paths = _download_summary_paths(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(
+        tempfile.mkdtemp(
+            prefix=".dms-parser-download-summary-",
+            dir=output_dir,
+        )
+    )
+    cleanup_staging = True
+    try:
+        staged_paths = tuple(staging_root / path.name for path in paths)
+        _write_csv_lf(pd.DataFrame(records), staged_paths[0])
+        with staged_paths[1].open("w", encoding="utf-8", newline="") as handle:
+            handle.write(
+                json.dumps(
+                    records,
+                    indent=2,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                )
+                + "\n"
+            )
+        _preflight_output_files(
+            paths,
+            overwrite=overwrite,
+            description="Batch summary output",
+        )
+        try:
+            _publish_staged_files(
+                staged_paths,
+                paths,
+                staging_root=staging_root,
+                overwrite=overwrite,
+                description="Batch summary output",
+            )
+        except _IncompletePublicationRollbackError as exc:
+            cleanup_staging = False
+            raise OSError(str(exc)) from exc.__cause__
+    finally:
+        if cleanup_staging:
+            shutil.rmtree(staging_root, ignore_errors=True)
+    return paths
+
+
+def _publish_staged_files(
+    staged_paths: tuple[Path, ...],
+    final_paths: tuple[Path, ...],
+    *,
+    staging_root: Path,
+    overwrite: bool,
+    description: str,
+) -> None:
+    """Publish staged files with backups and best-effort rollback."""
+    backups: list[tuple[Path, Path]] = []
+    published: list[Path] = []
+    try:
+        for index, (staged_path, final_path) in enumerate(
+            zip(staged_paths, final_paths, strict=True)
+        ):
+            if final_path.exists():
+                if not overwrite:
+                    raise FileExistsError(
+                        f"Output appeared during publication: {final_path}"
+                    )
+                backup_path = staging_root / f"backup-{index}-{final_path.name}"
+                os.replace(final_path, backup_path)
+                backups.append((final_path, backup_path))
+            os.replace(staged_path, final_path)
+            published.append(final_path)
+    except OSError as exc:
+        rollback_errors = _rollback_dataset_bundle(backups, published)
+        if rollback_errors:
+            details = "; ".join(str(error) for error in rollback_errors)
+            raise _IncompletePublicationRollbackError(
+                f"{description} publication failed and rollback was incomplete; "
+                f"recovery files remain in {staging_root}: {details}"
+            ) from exc
+        raise
 
 
 def _write_csv_lf(table: pd.DataFrame, path: Path) -> None:
