@@ -108,10 +108,38 @@ Inspect the installed interface:
 ```bash
 dms-parser --help
 dms-parser run --help
+dms-parser list --help
+dms-parser metadata --help
 ```
 
 The CLI logs at `INFO` by default; pass `--log-level DEBUG` for diagnostic
 output.
+
+Use `list` to discover dataset identifiers and `metadata` to inspect one
+normalized `DatasetRecord`:
+
+```bash
+dms-parser list --source proteingym --query BRCA1 --limit 10
+
+dms-parser metadata \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000097-a-1
+
+dms-parser list \
+    --source proteingym \
+    --variant-type substitutions \
+    --format json \
+    --output proteingym-catalog.json
+```
+
+These commands do not download score tables or run the processing pipeline.
+ProteinGym may download and cache lightweight reference CSV files under
+`~/.cache/dms-parser` by default; `--cache-dir` changes that location and
+`--refresh` refreshes those references. MaveDB instead queries its public
+metadata API directly and does not accept the cache, refresh, or variant-type
+options. Query semantics differ between the two sources, and `--variant-type`
+applies only to ProteinGym. Use `--format json` for machine-readable output.
+`--output` writes UTF-8 data and overwrites its target.
 
 ---
 
