@@ -1,25 +1,52 @@
 from __future__ import annotations
 
 import ast
+import json
 import logging
 import re
 from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 
 import dms_parser.cli as cli_module
-from dms_parser import PipelineResult
-from dms_parser.exceptions import SourceConfigurationError
+from dms_parser import DatasetRecord, FilesystemCache, PipelineResult
+from dms_parser.exceptions import (
+    CatalogError,
+    DatasetNotFoundError,
+    InvalidCacheEntryError,
+    SourceConfigurationError,
+)
+
+
+def _catalog_record(**overrides: Any) -> DatasetRecord:
+    """Return a representative normalized catalog record."""
+    values: dict[str, Any] = {
+        "source": "proteingym",
+        "dataset_id": "ASSAY_1",
+        "title": "Example assay",
+        "target_id": "P12345",
+        "variant_type": "substitutions",
+        "n_variants": 42,
+        "raw_metadata": {
+            "nested": {"label": "café", "missing": None},
+            "values": [1, None],
+        },
+    }
+    values.update(overrides)
+    return DatasetRecord(**values)
 
 
 @pytest.mark.parametrize(
     ("arguments", "expected_text"),
     [
-        (["--help"], ("run",)),
+        (["--help"], ("run", "list", "metadata")),
         (["run", "--help"], ("--config", "--dry-run")),
+        (["list", "--help"], ("--source", "--query", "--limit", "--format")),
+        (["metadata", "--help"], ("--source", "--dataset-id", "--format")),
     ],
-    ids=("root", "run"),
+    ids=("root", "run", "list", "metadata"),
 )
 def test_help_exits_successfully(
     arguments: list[str],
@@ -42,6 +69,13 @@ def test_help_exits_successfully(
         ["run"],
         ["run", "--config", "config.yml", "--only", "invalid"],
         ["run", "--config", "config.yml", "--log-level", "TRACE"],
+        ["list"],
+        ["metadata"],
+        ["metadata", "--source", "mavedb"],
+        ["metadata", "--source", "mavedb", "--dataset-id", "   "],
+        ["list", "--source", "mavedb", "--limit", "0"],
+        ["list", "--source", "mavedb", "--limit", "not-an-integer"],
+        ["list", "--source", "mavedb", "--offset", "-1"],
     ],
 )
 def test_invalid_usage_preserves_argparse_exit_status(
@@ -73,6 +107,20 @@ def test_run_forwards_explicit_arguments(
 
     monkeypatch.setattr(cli_module, "load_pipeline_config", load_config)
     monkeypatch.setattr(cli_module, "run_pipeline", run)
+    monkeypatch.setattr(
+        cli_module,
+        "list_datasets",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("run invoked list_datasets")
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("run invoked get_dataset_metadata")
+        ),
+    )
     monkeypatch.setattr(
         cli_module.logging,
         "basicConfig",
@@ -199,6 +247,513 @@ def test_unexpected_configuration_exception_propagates(
         cli_module.main(["run", "--config", "config.yml"])
 
     assert exc_info.value is cause
+
+
+def test_list_forwards_defaults_and_never_runs_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: dict[str, Any] = {}
+
+    def list_records(source: str, **kwargs: Any) -> list[DatasetRecord]:
+        calls.update(source=source, **kwargs)
+        return []
+
+    monkeypatch.setattr(cli_module, "list_datasets", list_records)
+    monkeypatch.setattr(
+        cli_module,
+        "run_pipeline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("list invoked run_pipeline")
+        ),
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    exit_code = cli_module.main(["list", "--source", "mavedb", "--format", "json"])
+
+    assert exit_code == 0
+    assert calls == {
+        "source": "mavedb",
+        "query": None,
+        "limit": None,
+        "offset": 0,
+        "variant_type": None,
+        "cache": None,
+        "refresh": False,
+    }
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_default_proteingym_cache_root_is_lazy_and_forwarded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_root = tmp_path / "home" / ".cache" / "dms-parser"
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(cli_module, "_default_cache_root", lambda: cache_root)
+
+    def list_records(source: str, **kwargs: Any) -> list[DatasetRecord]:
+        calls.update(source=source, **kwargs)
+        return []
+
+    monkeypatch.setattr(cli_module, "list_datasets", list_records)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(["list", "--source", "proteingym"]) == 0
+
+    assert isinstance(calls["cache"], FilesystemCache)
+    assert calls["cache"].root == cache_root
+    assert not cache_root.exists()
+
+
+def test_list_forwards_every_explicit_filter_and_expands_cache_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, Any] = {}
+    supplied_cache = Path("~") / "catalog-cli-test-cache"
+
+    def list_records(source: str, **kwargs: Any) -> list[DatasetRecord]:
+        calls.update(source=source, **kwargs)
+        return []
+
+    monkeypatch.setattr(cli_module, "list_datasets", list_records)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    exit_code = cli_module.main(
+        [
+            "list",
+            "--source",
+            "proteingym",
+            "--query",
+            "BRCA1",
+            "--limit",
+            "10",
+            "--offset",
+            "5",
+            "--variant-type",
+            "substitutions",
+            "--cache-dir",
+            str(supplied_cache),
+            "--refresh",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls["source"] == "proteingym"
+    assert calls["query"] == "BRCA1"
+    assert calls["limit"] == 10
+    assert calls["offset"] == 5
+    assert calls["variant_type"] == "substitutions"
+    assert calls["refresh"] is True
+    assert calls["cache"].root == supplied_cache.expanduser()
+
+
+def test_metadata_forwards_identifier_variant_type_cache_and_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, Any] = {}
+    cache_root = tmp_path / "cache"
+
+    def get_record(source: str, dataset_id: str, **kwargs: Any) -> DatasetRecord:
+        calls.update(source=source, dataset_id=dataset_id, **kwargs)
+        return _catalog_record()
+
+    monkeypatch.setattr(cli_module, "get_dataset_metadata", get_record)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    exit_code = cli_module.main(
+        [
+            "metadata",
+            "--source",
+            "proteingym",
+            "--dataset-id",
+            "ASSAY_1",
+            "--variant-type",
+            "indels",
+            "--cache-dir",
+            str(cache_root),
+            "--refresh",
+            "--format",
+            "json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls["source"] == "proteingym"
+    assert calls["dataset_id"] == "ASSAY_1"
+    assert calls["variant_type"] == "indels"
+    assert calls["refresh"] is True
+    assert calls["cache"].root == cache_root
+
+
+@pytest.mark.parametrize(
+    ("command", "option"),
+    [
+        ("list", ["--variant-type", "substitutions"]),
+        ("list", ["--cache-dir", "unused-cache"]),
+        ("list", ["--refresh"]),
+        ("metadata", ["--variant-type", "substitutions"]),
+        ("metadata", ["--cache-dir", "unused-cache"]),
+        ("metadata", ["--refresh"]),
+    ],
+)
+def test_mavedb_rejects_proteingym_options_before_side_effects(
+    command: str,
+    option: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_path = tmp_path / "output" / "result.txt"
+    arguments = [command, "--source", "mavedb"]
+    if command == "metadata":
+        arguments.extend(["--dataset-id", "urn:mavedb:00000001-a-1"])
+    arguments.extend(option + ["--output", str(output_path)])
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Invalid MaveDB options performed a side effect")
+
+    monkeypatch.setattr(cli_module, "FilesystemCache", forbidden)
+    monkeypatch.setattr(cli_module, "list_datasets", forbidden)
+    monkeypatch.setattr(cli_module, "get_dataset_metadata", forbidden)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(arguments)
+
+    assert exc_info.value.code == 2
+    assert not output_path.parent.exists()
+
+
+def test_list_text_is_aligned_without_mutating_displayed_values(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = _catalog_record(title="Line one\nLine\ttwo", target_id=None, n_variants=None)
+    monkeypatch.setattr(cli_module, "list_datasets", lambda *args, **kwargs: [record])
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(["list", "--source", "mavedb"]) == 0
+
+    output = capsys.readouterr().out
+    assert output.splitlines()[0].split() == [
+        "SOURCE",
+        "DATASET_ID",
+        "TITLE",
+        "TARGET_ID",
+        "VARIANT_TYPE",
+        "N_VARIANTS",
+    ]
+    assert "Line one Line two" in output
+    assert "raw_metadata" not in output
+    assert "-" in output
+    assert output.endswith("\n")
+    assert record.title == "Line one\nLine\ttwo"
+
+
+def test_metadata_text_contains_summary_and_pretty_raw_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = _catalog_record(title=None, target_id=None, variant_type=None, n_variants=None)
+    monkeypatch.setattr(cli_module, "get_dataset_metadata", lambda *args, **kwargs: record)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(
+        ["metadata", "--source", "mavedb", "--dataset-id", "urn:mavedb:1-a-1"]
+    ) == 0
+
+    output = capsys.readouterr().out
+    for field in (
+        "source:",
+        "dataset_id:",
+        "title: -",
+        "target_id: -",
+        "variant_type: -",
+        "n_variants: -",
+        "raw_metadata:",
+    ):
+        assert field in output
+    assert '    "label": "café"' in output
+    assert output.endswith("\n")
+
+
+@pytest.mark.parametrize("command", ["list", "metadata"])
+def test_catalog_json_contains_all_fields_and_preserves_whitespace(
+    command: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = _catalog_record(title="Line one\nLine\ttwo")
+    monkeypatch.setattr(cli_module, "list_datasets", lambda *args, **kwargs: [record])
+    monkeypatch.setattr(cli_module, "get_dataset_metadata", lambda *args, **kwargs: record)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+    arguments = [command, "--source", "mavedb", "--format", "json"]
+    if command == "metadata":
+        arguments.extend(["--dataset-id", "urn:mavedb:1-a-1"])
+
+    assert cli_module.main(arguments) == 0
+
+    output = capsys.readouterr().out
+    parsed = json.loads(output)
+    values = parsed[0] if command == "list" else parsed
+    assert list(values) == [
+        "source",
+        "dataset_id",
+        "title",
+        "target_id",
+        "variant_type",
+        "n_variants",
+        "raw_metadata",
+    ]
+    assert values["title"] == "Line one\nLine\ttwo"
+    assert values["raw_metadata"] == record.raw_metadata
+    assert "NaN" not in output
+    assert output.endswith("\n")
+
+
+def test_json_renderer_disables_nonstandard_nan(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, Any] = {}
+    original_dumps = json.dumps
+
+    def dumps(value: object, **kwargs: Any) -> str:
+        calls.update(kwargs)
+        return original_dumps(value, **kwargs)
+
+    monkeypatch.setattr(cli_module.json, "dumps", dumps)
+
+    assert json.loads(cli_module._render_json({"missing": None})) == {"missing": None}
+    assert calls["allow_nan"] is False
+    assert calls["ensure_ascii"] is False
+    assert calls["indent"] == 2
+
+
+@pytest.mark.parametrize(
+    ("output_format", "expected"),
+    [
+        ("text", "No datasets found."),
+        ("json", "[]"),
+    ],
+)
+def test_empty_list_output_is_successful(
+    output_format: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli_module, "list_datasets", lambda *args, **kwargs: [])
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(
+        ["list", "--source", "mavedb", "--format", output_format]
+    ) == 0
+    assert expected in capsys.readouterr().out
+
+
+def test_output_creates_parents_overwrites_utf8_and_suppresses_stdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    record = _catalog_record()
+    output_path = tmp_path / "nested" / "catalog.json"
+    monkeypatch.setattr(cli_module, "list_datasets", lambda *args, **kwargs: [record])
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+    caplog.set_level(logging.INFO, logger="dms_parser.cli")
+    arguments = [
+        "list",
+        "--source",
+        "mavedb",
+        "--format",
+        "json",
+        "--output",
+        str(output_path),
+    ]
+
+    assert cli_module.main(arguments) == 0
+    assert capsys.readouterr().out == ""
+    first_bytes = output_path.read_bytes()
+    assert "café".encode() in first_bytes
+    assert first_bytes.endswith(b"\n") and not first_bytes.endswith(b"\n\n")
+
+    output_path.write_text("obsolete", encoding="utf-8")
+    assert cli_module.main(arguments) == 0
+    assert json.loads(output_path.read_text(encoding="utf-8"))[0]["dataset_id"] == "ASSAY_1"
+    assert "Catalog output written path=" in caplog.text
+
+
+def test_output_format_is_not_inferred_from_filename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_path = tmp_path / "catalog.json"
+    monkeypatch.setattr(
+        cli_module,
+        "list_datasets",
+        lambda *args, **kwargs: [_catalog_record()],
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(
+        ["list", "--source", "mavedb", "--output", str(output_path)]
+    ) == 0
+
+    output = output_path.read_text(encoding="utf-8")
+    assert output.startswith("SOURCE")
+    assert output.endswith("\n") and not output.endswith("\n\n")
+
+
+def test_failed_atomic_publication_preserves_existing_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_path = tmp_path / "catalog.json"
+    output_path.write_text("existing", encoding="utf-8")
+    monkeypatch.setattr(
+        cli_module,
+        "list_datasets",
+        lambda *args, **kwargs: [_catalog_record()],
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+    monkeypatch.setattr(
+        cli_module.os,
+        "replace",
+        lambda source, destination: (_ for _ in ()).throw(OSError("publication failed")),
+    )
+
+    exit_code = cli_module.main(
+        [
+            "list",
+            "--source",
+            "mavedb",
+            "--format",
+            "json",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 1
+    assert output_path.read_text(encoding="utf-8") == "existing"
+    assert list(tmp_path.glob(".catalog.json.*")) == []
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        CatalogError("catalog failed"),
+        InvalidCacheEntryError("cache failed"),
+        requests.ConnectionError("network failed"),
+        OSError("filesystem failed"),
+    ],
+)
+def test_expected_list_failures_return_one(
+    cause: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise cause
+
+    monkeypatch.setattr(cli_module, "list_datasets", fail)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(["list", "--source", "mavedb"]) == 1
+
+
+def test_cache_construction_failure_returns_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise OSError("cache unavailable")
+
+    monkeypatch.setattr(cli_module, "FilesystemCache", fail)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(["list", "--source", "proteingym"]) == 1
+
+
+def test_dataset_not_found_returns_one_without_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_path = tmp_path / "metadata.json"
+
+    def not_found(*args: object, **kwargs: object) -> None:
+        raise DatasetNotFoundError("missing dataset")
+
+    monkeypatch.setattr(cli_module, "get_dataset_metadata", not_found)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(
+        [
+            "metadata",
+            "--source",
+            "mavedb",
+            "--dataset-id",
+            "urn:mavedb:missing",
+            "--output",
+            str(output_path),
+        ]
+    ) == 1
+    assert not output_path.exists()
+
+
+def test_unexpected_catalog_exception_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    cause = RuntimeError("unexpected")
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise cause
+
+    monkeypatch.setattr(cli_module, "list_datasets", fail)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli_module.main(["list", "--source", "mavedb"])
+
+    assert exc_info.value is cause
+
+
+@pytest.mark.parametrize(
+    ("arguments", "api_name"),
+    [
+        (["list", "--source", "mavedb"], "list_datasets"),
+        (
+            ["metadata", "--source", "mavedb", "--dataset-id", "urn:mavedb:1-a-1"],
+            "get_dataset_metadata",
+        ),
+    ],
+)
+def test_catalog_log_level_and_json_stdout_are_separate(
+    arguments: list[str],
+    api_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    logging_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        cli_module.logging,
+        "basicConfig",
+        lambda **kwargs: logging_calls.append(kwargs),
+    )
+    monkeypatch.setattr(cli_module, "list_datasets", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        cli_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: _catalog_record(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "run_pipeline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError(f"{api_name} invoked run_pipeline")
+        ),
+    )
+
+    assert cli_module.main(arguments + ["--format", "json", "--log-level", "DEBUG"]) == 0
+
+    json.loads(capsys.readouterr().out)
+    assert logging_calls[0]["level"] == logging.DEBUG
+    assert "stream" not in logging_calls[0]
 
 
 def test_pyproject_registers_cli_entry_point() -> None:
