@@ -17,6 +17,8 @@ from dms_parser import (
     DatasetDownloadResult,
     DatasetRecord,
     FilesystemCache,
+    MaveDBSnapshot,
+    MaveDBSnapshotRecord,
     PipelineResult,
 )
 from dms_parser.exceptions import (
@@ -50,7 +52,7 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
     [
         (
             ["--help"],
-            ("run", "list", "metadata", "download", "download-many"),
+            ("run", "list", "metadata", "download", "download-many", "snapshot"),
         ),
         (["run", "--help"], ("--config", "--dry-run")),
         (["list", "--help"], ("--source", "--query", "--limit", "--format")),
@@ -63,8 +65,22 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
             ["download-many", "--help"],
             ("--source", "--dataset-id", "--output-dir", "--overwrite"),
         ),
+        (["snapshot", "--help"], ("fetch",)),
+        (
+            ["snapshot", "fetch", "--help"],
+            ("--latest", "--record", "--cache-dir", "--format"),
+        ),
     ],
-    ids=("root", "run", "list", "metadata", "download", "download-many"),
+    ids=(
+        "root",
+        "run",
+        "list",
+        "metadata",
+        "download",
+        "download-many",
+        "snapshot",
+        "snapshot-fetch",
+    ),
 )
 def test_help_exits_successfully(
     arguments: list[str],
@@ -147,6 +163,17 @@ def test_help_exits_successfully(
             "ASSAY\n1",
             "--output-dir",
             "output",
+        ],
+        ["snapshot"],
+        ["snapshot", "fetch"],
+        ["snapshot", "fetch", "--record", "0"],
+        ["snapshot", "fetch", "--record", "not-a-record"],
+        [
+            "snapshot",
+            "fetch",
+            "--latest",
+            "--record",
+            "20840937",
         ],
     ],
 )
@@ -788,6 +815,166 @@ def test_unexpected_catalog_exception_propagates(monkeypatch: pytest.MonkeyPatch
 
     with pytest.raises(RuntimeError) as exc_info:
         cli_module.main(["list", "--source", "mavedb"])
+
+    assert exc_info.value is cause
+
+
+def _snapshot_result(
+    cache_root: Path,
+    *,
+    cache_hit: bool = False,
+) -> MaveDBSnapshot:
+    """Return a representative managed snapshot result for CLI tests."""
+    root = cache_root / "mavedb" / "snapshots" / "20840937"
+    return MaveDBSnapshot(
+        record=MaveDBSnapshotRecord(
+            record_id="20840937",
+            doi="10.5281/zenodo.20840937",
+            concept_doi="10.5281/zenodo.11201736",
+            publication_date="2026-06-24",
+            filename="mavedb-dump.test.tar.gz",
+            size=123,
+            checksum="md5:900150983cd24fb0d6963f7d28e17f72",
+            download_url="https://zenodo.org/content",
+        ),
+        archive_path=root / "mavedb-dump.test.tar.gz",
+        main_json_path=root / "main.json",
+        cache_hit=cache_hit,
+    )
+
+
+def test_snapshot_latest_forwards_defaults_and_renders_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cache_root = tmp_path / "default-cache"
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(cli_module, "_default_cache_root", lambda: cache_root)
+
+    def fetch(selector: str, **kwargs: Any) -> MaveDBSnapshot:
+        calls.update(selector=selector, **kwargs)
+        return _snapshot_result(kwargs["cache"].root)
+
+    monkeypatch.setattr(cli_module, "fetch_mavedb_snapshot", fetch)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(["snapshot", "fetch", "--latest"]) == 0
+
+    assert calls["selector"] == "latest"
+    assert calls["cache"].root == cache_root
+    assert calls["refresh"] is False
+    output = capsys.readouterr().out
+    for text in (
+        "record_id: 20840937",
+        "doi: 10.5281/zenodo.20840937",
+        "concept_doi: 10.5281/zenodo.11201736",
+        "publication_date: 2026-06-24",
+        "archive_filename: mavedb-dump.test.tar.gz",
+        "size: 123",
+        "checksum: md5:900150983cd24fb0d6963f7d28e17f72",
+        "archive_path:",
+        "main_json_path:",
+        "cache_hit: False",
+    ):
+        assert text in output
+    assert output.endswith("\n")
+
+
+def test_snapshot_record_forwards_options_and_renders_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cache_root = tmp_path / "explicit-cache"
+    calls: dict[str, Any] = {}
+    logging_calls: list[dict[str, Any]] = []
+
+    def fetch(selector: str, **kwargs: Any) -> MaveDBSnapshot:
+        calls.update(selector=selector, **kwargs)
+        return _snapshot_result(kwargs["cache"].root, cache_hit=True)
+
+    monkeypatch.setattr(cli_module, "fetch_mavedb_snapshot", fetch)
+    monkeypatch.setattr(
+        cli_module.logging,
+        "basicConfig",
+        lambda **kwargs: logging_calls.append(kwargs),
+    )
+
+    assert cli_module.main(
+        [
+            "snapshot",
+            "fetch",
+            "--record",
+            "20840937",
+            "--cache-dir",
+            str(cache_root),
+            "--refresh",
+            "--format",
+            "json",
+            "--log-level",
+            "DEBUG",
+        ]
+    ) == 0
+
+    assert calls["selector"] == "20840937"
+    assert calls["cache"].root == cache_root
+    assert calls["refresh"] is True
+    assert logging_calls[0]["level"] == logging.DEBUG
+    values = json.loads(capsys.readouterr().out)
+    assert list(values) == [
+        "record_id",
+        "doi",
+        "concept_doi",
+        "publication_date",
+        "archive_filename",
+        "size",
+        "checksum",
+        "archive_path",
+        "main_json_path",
+        "cache_hit",
+    ]
+    assert values["record_id"] == "20840937"
+    assert values["cache_hit"] is True
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        InvalidCacheEntryError("cache failed"),
+        requests.ConnectionError("network failed"),
+        OSError("filesystem failed"),
+    ],
+)
+def test_expected_snapshot_failures_return_one(
+    cause: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_mavedb_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(cause),
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(["snapshot", "fetch", "--latest"]) == 1
+    assert capsys.readouterr().out == ""
+
+
+def test_unexpected_snapshot_exception_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cause = RuntimeError("unexpected")
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_mavedb_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(cause),
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli_module.main(["snapshot", "fetch", "--latest"])
 
     assert exc_info.value is cause
 

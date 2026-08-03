@@ -28,9 +28,11 @@ from dms_parser.exceptions import (
     InvalidDatasetError,
     InvalidHGVSVariantError,
     InvalidPipelineOptionError,
+    InvalidSnapshotSelectorError,
     InvalidVariantError,
     MissingWildTypeError,
     MutationApplicationError,
+    MaveDBSnapshotError,
     PipelineError,
     SequenceValidationError,
     SourceConfigurationError,
@@ -73,6 +75,12 @@ from dms_parser.transforms import (
 )
 from dms_parser.pipeline import PipelineResult, run_pipeline
 from dms_parser.sources.mavedb_catalog import MaveDBCatalog
+from dms_parser.sources.mavedb_snapshots import (
+    MaveDBSnapshot,
+    MaveDBSnapshotRecord,
+    fetch_mavedb_snapshot,
+    resolve_mavedb_snapshot,
+)
 from dms_parser.sources.proteingym_catalog import ProteinGymCatalog
 from dms_parser.sources.proteingym_resources import (
     PROTEINGYM_RESOURCES,
@@ -104,6 +112,10 @@ __all__ = [
     "build_proteingym_dataset",
     "DatasetRecord",
     "MaveDBCatalog",
+    "MaveDBSnapshot",
+    "MaveDBSnapshotRecord",
+    "fetch_mavedb_snapshot",
+    "resolve_mavedb_snapshot",
     "ProteinGymCatalog",
     "ProteinGymResource",
     "PROTEINGYM_RESOURCES",
@@ -174,6 +186,8 @@ __all__ = [
     "UnsupportedSourceResourceError",
     "PipelineError",
     "InvalidPipelineOptionError",
+    "MaveDBSnapshotError",
+    "InvalidSnapshotSelectorError",
     "InvalidDatasetError",
     "MissingWildTypeError",
     "InvalidVariantError",

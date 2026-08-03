@@ -9,6 +9,12 @@ from dms_parser.sources.mavedb import (
     load_mavedb_from_url,
 )
 from dms_parser.sources.mavedb_catalog import MaveDBCatalog
+from dms_parser.sources.mavedb_snapshots import (
+    MaveDBSnapshot,
+    MaveDBSnapshotRecord,
+    fetch_mavedb_snapshot,
+    resolve_mavedb_snapshot,
+)
 from dms_parser.sources.proteingym import (
     download_proteingym_dataset,
     ensure_local_copy as ensure_local_proteingym_copy,
@@ -25,6 +31,10 @@ from dms_parser.sources.proteingym_resources import (
 
 __all__ = [
     "MaveDBCatalog",
+    "MaveDBSnapshot",
+    "MaveDBSnapshotRecord",
+    "fetch_mavedb_snapshot",
+    "resolve_mavedb_snapshot",
     "download_mavedb_dataset",
     "load_mavedb_dataset",
     "load_mavedb_from_url",

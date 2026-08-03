@@ -38,6 +38,14 @@ class DownloadError(DMSParserError):
     """Raised when a remote dataset cannot be downloaded."""
 
 
+class MaveDBSnapshotError(DMSParserError):
+    """Raised when a managed MaveDB snapshot cannot be resolved or prepared."""
+
+
+class InvalidSnapshotSelectorError(MaveDBSnapshotError, ValueError):
+    """Raised when a MaveDB snapshot selector is invalid."""
+
+
 class FileFormatError(DMSParserError):
     """Raised when an input file format is unsupported or malformed."""
 

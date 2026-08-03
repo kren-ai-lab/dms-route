@@ -29,6 +29,10 @@ from dms_parser.exceptions import (
     SourceConfigurationError,
 )
 from dms_parser.pipeline import run_pipeline
+from dms_parser.sources.mavedb_snapshots import (
+    MaveDBSnapshot,
+    fetch_mavedb_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +78,13 @@ def _non_negative_integer(value: str) -> int:
     if parsed < 0:
         raise argparse.ArgumentTypeError("must be a non-negative integer")
     return parsed
+
+
+def _positive_record_id(value: str) -> str:
+    """Parse a positive Zenodo record ID without changing its representation."""
+    if re.fullmatch(r"[1-9][0-9]*", value) is None:
+        raise argparse.ArgumentTypeError("must be a positive Zenodo record ID")
+    return value
 
 
 def _non_empty_dataset_id(value: str) -> str:
@@ -240,6 +251,46 @@ def _build_parser() -> argparse.ArgumentParser:
         handler=_download_many_command,
         command_parser=download_many_parser,
     )
+
+    snapshot_parser = subparsers.add_parser(
+        "snapshot",
+        help="Manage official MaveDB bulk snapshots.",
+    )
+    snapshot_subparsers = snapshot_parser.add_subparsers(
+        dest="snapshot_command",
+        required=True,
+    )
+    snapshot_fetch_parser = snapshot_subparsers.add_parser(
+        "fetch",
+        help="Resolve, verify, and cache a MaveDB bulk snapshot.",
+    )
+    selector_group = snapshot_fetch_parser.add_mutually_exclusive_group(
+        required=True
+    )
+    selector_group.add_argument(
+        "--latest",
+        action="store_true",
+        help="Resolve the latest concrete MaveDB snapshot.",
+    )
+    selector_group.add_argument(
+        "--record",
+        type=_positive_record_id,
+        help="Use one fixed concrete Zenodo record ID.",
+    )
+    snapshot_fetch_parser.add_argument("--cache-dir", type=_non_empty_path)
+    snapshot_fetch_parser.add_argument("--refresh", action="store_true")
+    snapshot_fetch_parser.add_argument(
+        "--format",
+        choices=_OUTPUT_FORMATS,
+        default="text",
+    )
+    snapshot_fetch_parser.add_argument(
+        "--log-level",
+        choices=_LOG_LEVELS,
+        default="INFO",
+        help="Set the process logging level (default: INFO).",
+    )
+    snapshot_fetch_parser.set_defaults(handler=_snapshot_fetch_command)
     return parser
 
 
@@ -421,6 +472,32 @@ def _download_many_command(args: argparse.Namespace) -> int:
     return result.exit_code
 
 
+def _snapshot_fetch_command(args: argparse.Namespace) -> int:
+    """Resolve and prepare one managed MaveDB bulk snapshot."""
+    cache_root = (
+        args.cache_dir.expanduser()
+        if args.cache_dir is not None
+        else _default_cache_root()
+    )
+    selector = "latest" if args.latest else args.record
+    try:
+        result = fetch_mavedb_snapshot(
+            selector,
+            cache=FilesystemCache(cache_root),
+            refresh=args.refresh,
+        )
+        rendered = (
+            _render_snapshot_text(result)
+            if args.format == "text"
+            else _render_json(_snapshot_values(result))
+        )
+        _publish_output(rendered, None)
+    except (DMSParserError, requests.RequestException, OSError) as exc:
+        logger.error("MaveDB snapshot fetch failed: %s", exc)
+        return 1
+    return 0
+
+
 def _catalog_cache(args: argparse.Namespace) -> FilesystemCache | None:
     """Validate source-specific options and lazily create a ProteinGym cache."""
     if args.source == "mavedb":
@@ -455,6 +532,22 @@ def _default_cache_root() -> Path:
 def _record_values(record: DatasetRecord) -> dict[str, Any]:
     """Return all DatasetRecord fields in dataclass order."""
     return asdict(record)
+
+
+def _snapshot_values(snapshot: MaveDBSnapshot) -> dict[str, Any]:
+    """Return the deterministic JSON representation for one snapshot."""
+    return {
+        "record_id": snapshot.record.record_id,
+        "doi": snapshot.record.doi,
+        "concept_doi": snapshot.record.concept_doi,
+        "publication_date": snapshot.record.publication_date,
+        "archive_filename": snapshot.record.filename,
+        "size": snapshot.record.size,
+        "checksum": snapshot.record.checksum,
+        "archive_path": str(snapshot.archive_path),
+        "main_json_path": str(snapshot.main_json_path),
+        "cache_hit": snapshot.cache_hit,
+    }
 
 
 def _render_json(value: object) -> str:
@@ -511,6 +604,15 @@ def _render_metadata_text(record: DatasetRecord) -> str:
     lines.append("raw_metadata:")
     lines.extend(f"  {line}" for line in raw_metadata.splitlines())
     return "\n".join(lines) + "\n"
+
+
+def _render_snapshot_text(snapshot: MaveDBSnapshot) -> str:
+    """Render one managed snapshot as stable human-readable fields."""
+    values = _snapshot_values(snapshot)
+    return "\n".join(
+        f"{field}: {_display_value(value)}"
+        for field, value in values.items()
+    ) + "\n"
 
 
 def _publish_output(rendered: str, output_path: Path | None) -> None:

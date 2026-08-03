@@ -112,6 +112,8 @@ dms-parser list --help
 dms-parser metadata --help
 dms-parser download --help
 dms-parser download-many --help
+dms-parser snapshot --help
+dms-parser snapshot fetch --help
 ```
 
 The CLI logs at `INFO` by default; pass `--log-level DEBUG` for diagnostic
@@ -142,6 +144,35 @@ metadata API directly and does not accept the cache, refresh, or variant-type
 options. Query semantics differ between the two sources, and `--variant-type`
 applies only to ProteinGym. Use `--format json` for machine-readable output.
 `--output` writes UTF-8 data and overwrites its target.
+
+### Managed MaveDB bulk snapshots
+
+MaveDB publishes versioned bulk snapshots under the stable Zenodo concept DOI
+`10.5281/zenodo.11201736`. Resolve the newest concrete version when following
+current releases, or pin a concrete record ID for reproducible work:
+
+```bash
+dms-parser snapshot fetch --latest
+
+dms-parser snapshot fetch \
+    --record 20840937 \
+    --format json
+```
+
+Snapshots are stored under
+`~/.cache/dms-parser/mavedb/snapshots/<record-id>/` by default;
+`--cache-dir` changes the cache root and `--refresh` reacquires the selected
+concrete version. A pinned valid version is reused without contacting Zenodo,
+while `--latest` resolves the current concrete record before checking its
+versioned cache entry.
+
+The bulk archive can be approximately 1.9 GB. Downloads are streamed and
+published only after their exact Zenodo size and checksum are verified. The
+manager safely extracts only the regular `main.json` member from supported
+TAR.GZ or ZIP archives; score tables are not extracted. Neither the archive nor
+`main.json` is stored in this repository. Dataset discovery from the managed
+`main.json` will be added as a separate feature; snapshot fetching does not
+search, select, merge, or standardize datasets.
 
 ### Download and standardize one dataset
 
