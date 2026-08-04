@@ -26,6 +26,7 @@ from dms_parser.downloads import (
 from dms_parser.exceptions import (
     DMSParserError,
     InvalidPipelineOptionError,
+    MaveDBSnapshotTableError,
     SourceConfigurationError,
 )
 from dms_parser.pipeline import run_pipeline
@@ -38,6 +39,12 @@ from dms_parser.sources.mavedb_bulk_catalog import (
 from dms_parser.sources.mavedb_snapshots import (
     MaveDBSnapshot,
     fetch_mavedb_snapshot,
+)
+from dms_parser.sources.mavedb_snapshot_tables import (
+    MaveDBSnapshotTable,
+    MaveDBSnapshotTableExtractionResult,
+    _validate_dataset_ids as _validate_snapshot_table_dataset_ids,
+    extract_mavedb_snapshot_tables,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,6 +141,52 @@ def _batch_dataset_id(value: str) -> str:
     ):
         raise argparse.ArgumentTypeError("must not contain control characters")
     return value
+
+
+def _snapshot_table_dataset_id(value: str) -> str:
+    """Parse one canonical MaveDB score-set URN for snapshot extraction."""
+    _batch_dataset_id(value)
+    try:
+        validate_source_dataset_id("mavedb", value)
+    except SourceConfigurationError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return value
+
+
+def _add_snapshot_selector(parser: argparse.ArgumentParser) -> None:
+    """Add the shared required snapshot selector arguments."""
+    selector = parser.add_mutually_exclusive_group(required=True)
+    selector.add_argument(
+        "--latest",
+        action="store_true",
+        help="Resolve the latest concrete MaveDB snapshot.",
+    )
+    selector.add_argument(
+        "--record",
+        type=_positive_record_id,
+        help="Use one fixed concrete Zenodo record ID.",
+    )
+
+
+def _add_snapshot_options(parser: argparse.ArgumentParser) -> None:
+    """Add cache and format options shared by snapshot commands."""
+    parser.add_argument("--cache-dir", type=_non_empty_path)
+    parser.add_argument("--refresh", action="store_true")
+    parser.add_argument(
+        "--format",
+        choices=_OUTPUT_FORMATS,
+        default="text",
+    )
+
+
+def _add_log_level_option(parser: argparse.ArgumentParser) -> None:
+    """Add the shared logging-level option."""
+    parser.add_argument(
+        "--log-level",
+        choices=_LOG_LEVELS,
+        default="INFO",
+        help="Set the process logging level (default: INFO).",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -284,33 +337,42 @@ def _build_parser() -> argparse.ArgumentParser:
         "fetch",
         help="Resolve, verify, and cache a MaveDB bulk snapshot.",
     )
-    selector_group = snapshot_fetch_parser.add_mutually_exclusive_group(
-        required=True
-    )
-    selector_group.add_argument(
-        "--latest",
-        action="store_true",
-        help="Resolve the latest concrete MaveDB snapshot.",
-    )
-    selector_group.add_argument(
-        "--record",
-        type=_positive_record_id,
-        help="Use one fixed concrete Zenodo record ID.",
-    )
-    snapshot_fetch_parser.add_argument("--cache-dir", type=_non_empty_path)
-    snapshot_fetch_parser.add_argument("--refresh", action="store_true")
-    snapshot_fetch_parser.add_argument(
-        "--format",
-        choices=_OUTPUT_FORMATS,
-        default="text",
-    )
-    snapshot_fetch_parser.add_argument(
-        "--log-level",
-        choices=_LOG_LEVELS,
-        default="INFO",
-        help="Set the process logging level (default: INFO).",
-    )
+    _add_snapshot_selector(snapshot_fetch_parser)
+    _add_snapshot_options(snapshot_fetch_parser)
+    _add_log_level_option(snapshot_fetch_parser)
     snapshot_fetch_parser.set_defaults(handler=_snapshot_fetch_command)
+
+    snapshot_extract_parser = snapshot_subparsers.add_parser(
+        "extract",
+        help="Extract selected raw score/count CSVs from a managed snapshot.",
+        description=(
+            "Extract selected raw score/count CSVs from a managed MaveDB "
+            "snapshot. An uncached snapshot may download approximately 1.9 GB."
+        ),
+    )
+    _add_snapshot_selector(snapshot_extract_parser)
+    snapshot_extract_parser.add_argument(
+        "--dataset-id",
+        action="append",
+        required=True,
+        type=_snapshot_table_dataset_id,
+        help="Canonical MaveDB score-set URN; repeat for multiple tables.",
+    )
+    snapshot_extract_parser.add_argument(
+        "--include-superseded",
+        action="store_true",
+    )
+    _add_snapshot_options(snapshot_extract_parser)
+    snapshot_extract_parser.add_argument(
+        "--output",
+        "-o",
+        type=_non_empty_path,
+    )
+    _add_log_level_option(snapshot_extract_parser)
+    snapshot_extract_parser.set_defaults(
+        handler=_snapshot_extract_command,
+        command_parser=snapshot_extract_parser,
+    )
 
     discover_parser = subparsers.add_parser(
         "discover",
@@ -561,6 +623,45 @@ def _snapshot_fetch_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _snapshot_extract_command(args: argparse.Namespace) -> int:
+    """Resolve one managed snapshot and extract explicit raw score tables."""
+    try:
+        dataset_ids = _validate_snapshot_table_dataset_ids(args.dataset_id)
+    except MaveDBSnapshotTableError as exc:
+        args.command_parser.error(str(exc))
+
+    cache_root = (
+        args.cache_dir.expanduser()
+        if args.cache_dir is not None
+        else _default_cache_root()
+    )
+    cache = FilesystemCache(cache_root)
+    selector = "latest" if args.latest else args.record
+    try:
+        snapshot = fetch_mavedb_snapshot(
+            selector,
+            cache=cache,
+            refresh=args.refresh,
+        )
+        result = extract_mavedb_snapshot_tables(
+            snapshot,
+            dataset_ids,
+            cache=cache,
+            include_superseded=args.include_superseded,
+            refresh=args.refresh,
+        )
+        rendered = (
+            _render_snapshot_table_text(result)
+            if args.format == "text"
+            else _render_json(_snapshot_table_extraction_values(result))
+        )
+        _publish_output(rendered, args.output)
+    except (DMSParserError, requests.RequestException, OSError) as exc:
+        logger.error("MaveDB snapshot table extraction failed: %s", exc)
+        return 1
+    return 0
+
+
 def _discover_command(args: argparse.Namespace) -> int:
     """Search one local or managed MaveDB bulk catalog."""
     if args.main_json is not None:
@@ -661,6 +762,39 @@ def _snapshot_values(snapshot: MaveDBSnapshot) -> dict[str, Any]:
         "archive_path": str(snapshot.archive_path),
         "main_json_path": str(snapshot.main_json_path),
         "cache_hit": snapshot.cache_hit,
+    }
+
+
+def _snapshot_table_values(table: MaveDBSnapshotTable) -> dict[str, Any]:
+    """Serialize one extracted raw-table bundle."""
+    return {
+        "dataset_id": table.dataset_id,
+        "is_superseded": table.is_superseded,
+        "scores_path": str(table.scores_path),
+        "counts_path": (
+            str(table.counts_path) if table.counts_path is not None else None
+        ),
+        "cache_hit": table.cache_hit,
+    }
+
+
+def _snapshot_table_extraction_values(
+    result: MaveDBSnapshotTableExtractionResult,
+) -> dict[str, Any]:
+    """Return deterministic JSON values for snapshot-table extraction."""
+    record = result.record
+    return {
+        "record_id": record.record_id,
+        "doi": record.doi,
+        "concept_doi": record.concept_doi,
+        "publication_date": record.publication_date,
+        "archive": {
+            "filename": record.filename,
+            "size": record.size,
+            "checksum": record.checksum,
+        },
+        "dataset_count": result.dataset_count,
+        "tables": [_snapshot_table_values(table) for table in result.tables],
     }
 
 
@@ -788,6 +922,35 @@ def _render_snapshot_text(snapshot: MaveDBSnapshot) -> str:
         f"{field}: {_display_value(value)}"
         for field, value in values.items()
     ) + "\n"
+
+
+def _render_snapshot_table_text(
+    result: MaveDBSnapshotTableExtractionResult,
+) -> str:
+    """Render selected raw snapshot tables as stable human-readable fields."""
+    lines = [
+        f"record_id: {_display_value(result.record.record_id)}",
+        f"doi: {_display_value(result.record.doi)}",
+        f"archive_filename: {_display_value(result.record.filename)}",
+        f"dataset_count: {result.dataset_count}",
+    ]
+    for table in result.tables:
+        lines.extend(
+            [
+                f"dataset_id: {_display_value(table.dataset_id)}",
+                "  status: "
+                + ("superseded" if table.is_superseded else "current"),
+                f"  scores_path: {_display_value(table.scores_path)}",
+                "  counts_path: "
+                + (
+                    _display_value(table.counts_path)
+                    if table.counts_path is not None
+                    else "not available"
+                ),
+                "  cache: " + ("hit" if table.cache_hit else "extracted"),
+            ]
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _render_discovery_text(

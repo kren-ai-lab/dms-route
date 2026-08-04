@@ -21,6 +21,11 @@ from dms_parser.sources.mavedb_snapshots import (
     fetch_mavedb_snapshot,
     resolve_mavedb_snapshot,
 )
+from dms_parser.sources.mavedb_snapshot_tables import (
+    MaveDBSnapshotTable,
+    MaveDBSnapshotTableExtractionResult,
+    extract_mavedb_snapshot_tables,
+)
 from dms_parser.sources.proteingym import (
     download_proteingym_dataset,
     ensure_local_copy as ensure_local_proteingym_copy,
@@ -45,6 +50,9 @@ __all__ = [
     "MaveDBDiscoveredExperiment",
     "MaveDBDiscoveredScoreSet",
     "MaveDBDiscoveryResult",
+    "MaveDBSnapshotTable",
+    "MaveDBSnapshotTableExtractionResult",
+    "extract_mavedb_snapshot_tables",
     "download_mavedb_dataset",
     "load_mavedb_dataset",
     "load_mavedb_from_url",

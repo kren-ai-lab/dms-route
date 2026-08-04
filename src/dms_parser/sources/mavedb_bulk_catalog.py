@@ -10,7 +10,11 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from dms_parser.exceptions import CatalogError, InvalidCatalogQueryError
+from dms_parser.exceptions import (
+    CatalogError,
+    InvalidCatalogQueryError,
+    SourceConfigurationError,
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,12 @@ class MaveDBBulkCatalog:
         self.snapshot_title = snapshot_title
         self.as_of = as_of
         self._score_sets = score_sets
+        self._score_set_index = MappingProxyType(
+            {
+                indexed.record.dataset_id: indexed.record
+                for indexed in score_sets
+            }
+        )
         self._name_index = name_index
         self._identifier_index = MappingProxyType(dict(identifier_index))
 
@@ -180,6 +190,19 @@ class MaveDBBulkCatalog:
             as_of=self.as_of,
             experiments=experiments,
         )
+
+    def get_score_set(
+        self,
+        dataset_id: str,
+    ) -> MaveDBDiscoveredScoreSet | None:
+        """Return one indexed current or superseded score set by canonical URN."""
+        from dms_parser.config import validate_source_dataset_id
+
+        try:
+            validate_source_dataset_id("mavedb", dataset_id)
+        except SourceConfigurationError as exc:
+            raise InvalidCatalogQueryError(str(exc)) from exc
+        return self._score_set_index.get(dataset_id)
 
 
 def _validate_path(path: object) -> Path:

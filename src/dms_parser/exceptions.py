@@ -46,6 +46,18 @@ class InvalidSnapshotSelectorError(MaveDBSnapshotError, ValueError):
     """Raised when a MaveDB snapshot selector is invalid."""
 
 
+class MaveDBSnapshotTableError(MaveDBSnapshotError):
+    """Raised when raw tables cannot be extracted from a managed snapshot."""
+
+
+class SnapshotDatasetNotFoundError(MaveDBSnapshotTableError, LookupError):
+    """Raised when a requested score set is absent from a snapshot catalog."""
+
+
+class SupersededSnapshotDatasetError(MaveDBSnapshotTableError):
+    """Raised when superseded snapshot data was not explicitly requested."""
+
+
 class FileFormatError(DMSParserError):
     """Raised when an input file format is unsupported or malformed."""
 

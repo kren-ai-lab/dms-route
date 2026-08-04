@@ -213,6 +213,49 @@ def test_repeated_searches_do_not_reopen_or_reparse_file(
     assert catalog.search_by_gene("P51587").score_set_count == 1
 
 
+def test_score_set_lookup_returns_current_superseded_and_missing_records(
+    tmp_path: Path,
+) -> None:
+    catalog = _catalog(tmp_path)
+
+    current = catalog.get_score_set("urn:mavedb:00000002-a-2")
+    superseded = catalog.get_score_set("urn:mavedb:00000002-a-1")
+
+    assert current is not None and current.is_superseded is False
+    assert superseded is not None and superseded.is_superseded is True
+    assert catalog.get_score_set("urn:mavedb:99999999-a-1") is None
+
+
+@pytest.mark.parametrize(
+    "dataset_id",
+    ["", "invalid", "urn:mavedb:00000002-A-1", True, None],
+)
+def test_score_set_lookup_rejects_noncanonical_urns(
+    dataset_id: object,
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(InvalidCatalogQueryError, match="score-set URN|non-empty"):
+        _catalog(tmp_path).get_score_set(dataset_id)  # type: ignore[arg-type]
+
+
+def test_repeated_score_set_lookups_use_detached_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = _catalog(tmp_path)
+    monkeypatch.setattr(
+        Path,
+        "open",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Lookup reopened main.json")
+        ),
+    )
+    catalog._score_sets = ()
+
+    assert catalog.get_score_set("urn:mavedb:00000002-a-2") is not None
+    assert catalog.get_score_set("urn:mavedb:99999999-a-1") is None
+
+
 def test_name_search_groups_sorts_and_does_not_leak_siblings(tmp_path: Path) -> None:
     result = _catalog(tmp_path).search_by_gene("  bRcA  ")
 

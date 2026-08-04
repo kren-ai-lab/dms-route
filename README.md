@@ -114,6 +114,7 @@ dms-parser download --help
 dms-parser download-many --help
 dms-parser snapshot --help
 dms-parser snapshot fetch --help
+dms-parser snapshot extract --help
 dms-parser discover --help
 ```
 
@@ -269,6 +270,103 @@ dms-parser download \
     --dataset-id urn:mavedb:00000097-a-1 \
     --output-dir datasets/mavedb-00000097-a-1
 ```
+
+### Extract raw tables from a managed MaveDB snapshot
+
+`snapshot extract` copies the raw archival scores CSV, plus the counts CSV when
+available, for explicit score-set URNs. It never searches or selects a score
+set. Resolve the latest snapshot or pin a concrete Zenodo record for
+reproducibility:
+
+```bash
+dms-parser snapshot extract \
+    --latest \
+    --dataset-id urn:mavedb:00000003-a-1
+
+dms-parser snapshot extract \
+    --record 20840937 \
+    --dataset-id urn:mavedb:00000003-a-1 \
+    --dataset-id urn:mavedb:00000003-a-2
+```
+
+An uncached selector may download the approximately 1.9 GB managed archive.
+Extracted tables use a separate cache under
+`<cache-root>/mavedb/snapshot_tables/<record-id>/`. Valid bundles are reused
+without reopening the archive. `--refresh` refreshes both the managed snapshot
+and every requested extraction bundle. TAR.GZ extraction may scan the archive
+metadata even though only explicitly requested files are written.
+
+Official members are derived only from the validated score-set URN by replacing
+colons with hyphens:
+
+```text
+urn:mavedb:00000003-a-1
+csv/urn-mavedb-00000003-a-1.scores.csv
+csv/urn-mavedb-00000003-a-1.counts.csv
+```
+
+The scores member is required. Counts are optional and are extracted
+automatically when present. Superseded score sets are rejected unless requested
+explicitly:
+
+```bash
+dms-parser snapshot extract \
+    --record 20840937 \
+    --dataset-id urn:mavedb:00000003-a-1 \
+    --include-superseded
+```
+
+Text output reports concrete snapshot provenance, current/superseded status,
+final file paths, counts availability, and whether each bundle was extracted or
+reused:
+
+```text
+record_id: 20840937
+doi: 10.5281/zenodo.20840937
+archive_filename: mavedb-dump.2026062418131.tar.gz
+dataset_count: 1
+dataset_id: urn:mavedb:00000003-a-1
+  status: current
+  scores_path: .../scores.csv
+  counts_path: .../counts.csv
+  cache: extracted
+```
+
+Use JSON on standard output or publish it atomically to a UTF-8 file:
+
+```bash
+dms-parser snapshot extract \
+    --record 20840937 \
+    --dataset-id urn:mavedb:00000003-a-1 \
+    --format json \
+    --output extracted-tables.json
+```
+
+The Python API deliberately separates snapshot resolution from extraction:
+
+```python
+from dms_parser import (
+    FilesystemCache,
+    extract_mavedb_snapshot_tables,
+    fetch_mavedb_snapshot,
+)
+
+cache = FilesystemCache("/data/dms-parser-cache")
+snapshot = fetch_mavedb_snapshot("20840937", cache=cache)
+result = extract_mavedb_snapshot_tables(
+    snapshot,
+    ["urn:mavedb:00000003-a-1"],
+    cache=cache,
+)
+
+print(result.tables[0].scores_path)
+print(result.tables[0].counts_path)
+```
+
+These files are raw archival CSVs. Extraction does not parse their columns,
+standardize variants, transform scores, choose compatible alternatives, or
+merge datasets. It also does not use the live MaveDB API or place raw tables in
+the standardized download cache.
 
 ### Download and standardize one dataset
 

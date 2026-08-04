@@ -22,13 +22,25 @@ from dms_parser import (
     MaveDBDiscoveryResult,
     MaveDBSnapshot,
     MaveDBSnapshotRecord,
+    MaveDBSnapshotTable,
+    MaveDBSnapshotTableExtractionResult,
     PipelineResult,
 )
 from dms_parser.exceptions import (
     CatalogError,
     DatasetNotFoundError,
     InvalidCacheEntryError,
+    MaveDBSnapshotTableError,
     SourceConfigurationError,
+)
+
+SNAPSHOT_TABLE_ID = "urn:mavedb:00000003-a-1"
+SNAPSHOT_EXTRACT_LATEST = (
+    "snapshot",
+    "extract",
+    "--latest",
+    "--dataset-id",
+    SNAPSHOT_TABLE_ID,
 )
 
 
@@ -76,10 +88,22 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
             ["download-many", "--help"],
             ("--source", "--dataset-id", "--output-dir", "--overwrite"),
         ),
-        (["snapshot", "--help"], ("fetch",)),
+        (["snapshot", "--help"], ("fetch", "extract")),
         (
             ["snapshot", "fetch", "--help"],
             ("--latest", "--record", "--cache-dir", "--format"),
+        ),
+        (
+            ["snapshot", "extract", "--help"],
+            (
+                "--latest",
+                "--record",
+                "--dataset-id",
+                "--include-superseded",
+                "--format",
+                "--output",
+                "1.9 GB",
+            ),
         ),
         (
             ["discover", "--help"],
@@ -102,6 +126,7 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
         "download-many",
         "snapshot",
         "snapshot-fetch",
+        "snapshot-extract",
         "discover",
     ),
 )
@@ -197,6 +222,39 @@ def test_help_exits_successfully(
             "--latest",
             "--record",
             "20840937",
+        ],
+        ["snapshot", "extract"],
+        ["snapshot", "extract", "--latest"],
+        [
+            "snapshot",
+            "extract",
+            "--latest",
+            "--record",
+            "20840937",
+            "--dataset-id",
+            SNAPSHOT_TABLE_ID,
+        ],
+        [
+            "snapshot",
+            "extract",
+            "--record",
+            "0",
+            "--dataset-id",
+            SNAPSHOT_TABLE_ID,
+        ],
+        [
+            "snapshot",
+            "extract",
+            "--latest",
+            "--dataset-id",
+            "invalid",
+        ],
+        [
+            "snapshot",
+            "extract",
+            "--latest",
+            "--dataset-id",
+            "urn:mavedb:00000003-a-0",
         ],
         ["discover"],
         ["discover", "--main-json", "main.json"],
@@ -1012,6 +1070,320 @@ def test_unexpected_snapshot_exception_propagates(
 
     with pytest.raises(RuntimeError) as exc_info:
         cli_module.main(["snapshot", "fetch", "--latest"])
+
+    assert exc_info.value is cause
+
+
+def _snapshot_table_result(
+    cache_root: Path,
+    *,
+    counts: bool = True,
+    cache_hit: bool = False,
+    superseded: bool = False,
+) -> MaveDBSnapshotTableExtractionResult:
+    """Return one representative raw snapshot-table extraction result."""
+    snapshot = _snapshot_result(cache_root)
+    table_root = (
+        cache_root
+        / "mavedb"
+        / "snapshot_tables"
+        / "20840937"
+        / SNAPSHOT_TABLE_ID.replace(":", "-")
+    )
+    return MaveDBSnapshotTableExtractionResult(
+        record=snapshot.record,
+        tables=(
+            MaveDBSnapshotTable(
+                dataset_id=SNAPSHOT_TABLE_ID,
+                scores_path=table_root / "scores.csv",
+                counts_path=table_root / "counts.csv" if counts else None,
+                is_superseded=superseded,
+                cache_hit=cache_hit,
+            ),
+        ),
+    )
+
+
+def _forbidden_snapshot_extract_side_effect(
+    *args: object,
+    **kwargs: object,
+) -> None:
+    """Fail when snapshot extraction invokes an unrelated API."""
+    raise AssertionError("snapshot extract invoked a forbidden operation")
+
+
+def _patch_snapshot_extract_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    extract: Any,
+) -> None:
+    """Install the common local fetch and extraction CLI test doubles."""
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_mavedb_snapshot",
+        lambda selector, **kwargs: _snapshot_result(kwargs["cache"].root),
+    )
+    monkeypatch.setattr(cli_module, "extract_mavedb_snapshot_tables", extract)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+
+def test_snapshot_extract_latest_calls_each_layer_once_and_renders_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cache_root = tmp_path / "default-cache"
+    calls: dict[str, Any] = {"fetch_count": 0, "extract_count": 0}
+    monkeypatch.setattr(cli_module, "_default_cache_root", lambda: cache_root)
+
+    def fetch(selector: str, **kwargs: Any) -> MaveDBSnapshot:
+        calls["fetch_count"] += 1
+        calls["selector"] = selector
+        calls["fetch_cache"] = kwargs["cache"]
+        calls["fetch_refresh"] = kwargs["refresh"]
+        return _snapshot_result(kwargs["cache"].root)
+
+    def extract(
+        snapshot: MaveDBSnapshot,
+        dataset_ids: object,
+        **kwargs: Any,
+    ) -> MaveDBSnapshotTableExtractionResult:
+        calls["extract_count"] += 1
+        calls["snapshot"] = snapshot
+        calls["dataset_ids"] = dataset_ids
+        calls["extract_cache"] = kwargs["cache"]
+        calls["include_superseded"] = kwargs["include_superseded"]
+        calls["extract_refresh"] = kwargs["refresh"]
+        return _snapshot_table_result(kwargs["cache"].root)
+
+    monkeypatch.setattr(cli_module, "fetch_mavedb_snapshot", fetch)
+    monkeypatch.setattr(cli_module, "extract_mavedb_snapshot_tables", extract)
+    for name in (
+        "get_dataset_metadata",
+        "download_and_standardize_dataset",
+        "download_and_standardize_datasets",
+    ):
+        monkeypatch.setattr(
+            cli_module,
+            name,
+            _forbidden_snapshot_extract_side_effect,
+        )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(SNAPSHOT_EXTRACT_LATEST) == 0
+
+    assert calls["fetch_count"] == calls["extract_count"] == 1
+    assert calls["selector"] == "latest"
+    assert calls["dataset_ids"] == (SNAPSHOT_TABLE_ID,)
+    assert calls["fetch_cache"] is calls["extract_cache"]
+    assert calls["fetch_cache"].root == cache_root
+    assert calls["fetch_refresh"] is calls["extract_refresh"] is False
+    assert calls["include_superseded"] is False
+    output = capsys.readouterr().out
+    for text in (
+        "record_id: 20840937",
+        "doi: 10.5281/zenodo.20840937",
+        "archive_filename: mavedb-dump.test.tar.gz",
+        "dataset_count: 1",
+        f"dataset_id: {SNAPSHOT_TABLE_ID}",
+        "status: current",
+        "scores_path:",
+        "counts_path:",
+        "cache: extracted",
+    ):
+        assert text in output
+
+
+def test_snapshot_extract_record_forwards_options_and_renders_json_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cache_root = tmp_path / "cache"
+    output_path = tmp_path / "nested" / "tables.json"
+    calls: dict[str, Any] = {}
+    logging_calls: list[dict[str, Any]] = []
+
+    def fetch(selector: str, **kwargs: Any) -> MaveDBSnapshot:
+        calls.update(selector=selector, fetch_kwargs=kwargs)
+        return _snapshot_result(kwargs["cache"].root)
+
+    def extract(
+        snapshot: MaveDBSnapshot,
+        dataset_ids: object,
+        **kwargs: Any,
+    ) -> MaveDBSnapshotTableExtractionResult:
+        calls.update(
+            snapshot=snapshot,
+            dataset_ids=dataset_ids,
+            extract_kwargs=kwargs,
+        )
+        return _snapshot_table_result(
+            kwargs["cache"].root,
+            counts=False,
+            cache_hit=True,
+            superseded=True,
+        )
+
+    monkeypatch.setattr(cli_module, "fetch_mavedb_snapshot", fetch)
+    monkeypatch.setattr(cli_module, "extract_mavedb_snapshot_tables", extract)
+    monkeypatch.setattr(
+        cli_module.logging,
+        "basicConfig",
+        lambda **kwargs: logging_calls.append(kwargs),
+    )
+
+    assert cli_module.main(
+        [
+            "snapshot",
+            "extract",
+            "--record",
+            "20840937",
+            "--dataset-id",
+            "urn:mavedb:00000003-a-2",
+            "--dataset-id",
+            SNAPSHOT_TABLE_ID,
+            "--include-superseded",
+            "--cache-dir",
+            str(cache_root),
+            "--refresh",
+            "--format",
+            "json",
+            "--output",
+            str(output_path),
+            "--log-level",
+            "DEBUG",
+        ]
+    ) == 0
+
+    assert capsys.readouterr().out == ""
+    assert calls["selector"] == "20840937"
+    assert calls["dataset_ids"] == (
+        "urn:mavedb:00000003-a-2",
+        SNAPSHOT_TABLE_ID,
+    )
+    assert calls["fetch_kwargs"]["cache"] is calls["extract_kwargs"]["cache"]
+    assert calls["fetch_kwargs"]["cache"].root == cache_root
+    assert calls["fetch_kwargs"]["refresh"] is True
+    assert calls["extract_kwargs"]["refresh"] is True
+    assert calls["extract_kwargs"]["include_superseded"] is True
+    assert logging_calls[0]["level"] == logging.DEBUG
+    values = json.loads(output_path.read_text(encoding="utf-8"))
+    assert list(values) == [
+        "record_id",
+        "doi",
+        "concept_doi",
+        "publication_date",
+        "archive",
+        "dataset_count",
+        "tables",
+    ]
+    assert values["archive"] == {
+        "filename": "mavedb-dump.test.tar.gz",
+        "size": 123,
+        "checksum": "md5:900150983cd24fb0d6963f7d28e17f72",
+    }
+    assert values["tables"][0]["counts_path"] is None
+    assert values["tables"][0]["is_superseded"] is True
+    assert values["tables"][0]["cache_hit"] is True
+    assert ".extract-" not in output_path.read_text(encoding="utf-8")
+
+
+def test_snapshot_extract_counts_absent_and_cache_hit_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _patch_snapshot_extract_dependencies(
+        monkeypatch,
+        lambda snapshot, dataset_ids, **kwargs: _snapshot_table_result(
+            kwargs["cache"].root,
+            counts=False,
+            cache_hit=True,
+        ),
+    )
+
+    assert cli_module.main(SNAPSHOT_EXTRACT_LATEST) == 0
+
+    output = capsys.readouterr().out
+    assert "counts_path: not available" in output
+    assert "cache: hit" in output
+
+
+def test_snapshot_extract_duplicate_ids_fail_before_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "FilesystemCache",
+        "fetch_mavedb_snapshot",
+        "extract_mavedb_snapshot_tables",
+    ):
+        monkeypatch.setattr(
+            cli_module,
+            name,
+            _forbidden_snapshot_extract_side_effect,
+        )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(
+            [*SNAPSHOT_EXTRACT_LATEST, "--dataset-id", SNAPSHOT_TABLE_ID]
+        )
+
+    assert exc_info.value.code == 2
+
+
+def test_snapshot_extract_help_performs_no_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("fetch_mavedb_snapshot", "extract_mavedb_snapshot_tables"):
+        monkeypatch.setattr(
+            cli_module,
+            name,
+            _forbidden_snapshot_extract_side_effect,
+        )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(["snapshot", "extract", "--help"])
+
+    assert exc_info.value.code == 0
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        MaveDBSnapshotTableError("table failed"),
+        OSError("filesystem failed"),
+    ],
+)
+def test_expected_snapshot_extract_failures_return_one_without_output(
+    cause: Exception,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output_path = tmp_path / "tables.json"
+    _patch_snapshot_extract_dependencies(
+        monkeypatch,
+        lambda *args, **kwargs: (_ for _ in ()).throw(cause),
+    )
+
+    assert cli_module.main(
+        [*SNAPSHOT_EXTRACT_LATEST, "--output", str(output_path)]
+    ) == 1
+    assert capsys.readouterr().out == ""
+    assert not output_path.exists()
+
+
+def test_unexpected_snapshot_extract_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cause = RuntimeError("unexpected")
+    _patch_snapshot_extract_dependencies(
+        monkeypatch,
+        lambda *args, **kwargs: (_ for _ in ()).throw(cause),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli_module.main(SNAPSHOT_EXTRACT_LATEST)
 
     assert exc_info.value is cause
 
