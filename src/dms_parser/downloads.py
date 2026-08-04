@@ -6,7 +6,7 @@ import hashlib
 import logging
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -46,6 +46,10 @@ from dms_parser.io import (
 )
 from dms_parser.sources.mavedb import download_mavedb_dataset
 from dms_parser.sources.mavedb_catalog import MAVEDB_API_URL
+from dms_parser.sources._mavedb_snapshot_dataset import (
+    MaveDBSnapshotDataset,
+    acquire_cached_mavedb_snapshot_datasets,
+)
 from dms_parser.sources.proteingym import download_proteingym_dataset
 from dms_parser.sources.proteingym_resources import get_proteingym_resource
 
@@ -143,6 +147,15 @@ class _ProteinGymDownloadMetadata:
     uniprot_id: str | None
 
 
+@dataclass(frozen=True)
+class _MaveDBDownloadInput:
+    """Source-specific inputs for the common MaveDB build path."""
+
+    scores_path: Path
+    metadata: dict[str, Any]
+    provenance: Mapping[str, Any]
+
+
 def download_and_standardize_dataset(
     source: str,
     dataset_id: str,
@@ -153,9 +166,18 @@ def download_and_standardize_dataset(
     drop_failed: bool = False,
     add_wildtype_row: bool = False,
     overwrite: bool = False,
+    acquisition: str | None = None,
+    snapshot_record_id: str | None = None,
+    include_superseded: bool = False,
 ) -> DatasetDownloadResult:
     """Download and standardize one substitutions dataset without YAML config."""
     validate_source_dataset_id(source, dataset_id)
+    acquisition_method = _validate_download_acquisition(
+        source,
+        acquisition=acquisition,
+        snapshot_record_id=snapshot_record_id,
+        include_superseded=include_superseded,
+    )
     if not isinstance(output_dir, (str, Path)) or not str(output_dir).strip():
         raise InvalidPipelineOptionError("output_dir must be a non-empty path.")
     if not isinstance(cache, FilesystemCache):
@@ -187,6 +209,17 @@ def download_and_standardize_dataset(
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
         )
+    elif acquisition_method == "snapshot":
+        assert snapshot_record_id is not None
+        built_table, summary = _download_mavedb_snapshot_dataset(
+            dataset_id,
+            snapshot_record_id=snapshot_record_id,
+            cache=cache,
+            refresh=refresh,
+            drop_failed=drop_failed,
+            add_wildtype_row=add_wildtype_row,
+            include_superseded=include_superseded,
+        )
     else:
         built_table, summary = _download_mavedb_dataset(
             dataset_id,
@@ -215,8 +248,17 @@ def download_and_standardize_datasets(
     drop_failed: bool = False,
     add_wildtype_row: bool = False,
     overwrite: bool = False,
+    acquisition: str | None = None,
+    snapshot_record_id: str | None = None,
+    include_superseded: bool = False,
 ) -> DatasetBatchDownloadResult:
     """Download and standardize an ordered batch from one substitutions source."""
+    acquisition_method = _validate_download_acquisition(
+        source,
+        acquisition=acquisition,
+        snapshot_record_id=snapshot_record_id,
+        include_superseded=include_superseded,
+    )
     plan = _validate_dataset_batch_request(
         source,
         dataset_ids,
@@ -229,6 +271,7 @@ def download_and_standardize_datasets(
     if not isinstance(cache, FilesystemCache):
         raise InvalidPipelineOptionError("cache must be a FilesystemCache.")
 
+    batch_provenance: dict[str, Mapping[str, Any]] | None = None
     if source == "proteingym":
         entries = _download_proteingym_batch(
             plan,
@@ -237,6 +280,18 @@ def download_and_standardize_datasets(
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
             overwrite=overwrite,
+        )
+    elif acquisition_method == "snapshot":
+        assert snapshot_record_id is not None
+        entries, batch_provenance = _download_mavedb_snapshot_batch(
+            plan,
+            snapshot_record_id=snapshot_record_id,
+            cache=cache,
+            refresh=refresh,
+            drop_failed=drop_failed,
+            add_wildtype_row=add_wildtype_row,
+            overwrite=overwrite,
+            include_superseded=include_superseded,
         )
     else:
         entries = _download_mavedb_batch(
@@ -249,7 +304,15 @@ def download_and_standardize_datasets(
         )
 
     records = [
-        _batch_summary_record(entry, batch_root=plan.output_root)
+        _batch_summary_record(
+            entry,
+            batch_root=plan.output_root,
+            provenance=(
+                batch_provenance.get(entry.dataset_id)
+                if batch_provenance is not None
+                else None
+            ),
+        )
         for entry in entries
     ]
     summary_csv_path, summary_json_path = _publish_download_summary(
@@ -264,6 +327,68 @@ def download_and_standardize_datasets(
         summary_csv_path=summary_csv_path,
         summary_json_path=summary_json_path,
     )
+
+
+def _validate_download_acquisition(
+    source: str,
+    *,
+    acquisition: str | None,
+    snapshot_record_id: str | None,
+    include_superseded: bool,
+) -> str:
+    """Validate acquisition compatibility before any download side effect."""
+    if not isinstance(include_superseded, bool):
+        raise InvalidPipelineOptionError(
+            "include_superseded must be a boolean."
+        )
+    if acquisition is not None and not isinstance(acquisition, str):
+        raise InvalidPipelineOptionError(
+            "acquisition must be None, 'api', or 'snapshot'."
+        )
+    if acquisition not in {None, "api", "snapshot"}:
+        raise InvalidPipelineOptionError(
+            "acquisition must be None, 'api', or 'snapshot'."
+        )
+    if snapshot_record_id is not None and not isinstance(
+        snapshot_record_id,
+        str,
+    ):
+        raise InvalidPipelineOptionError(
+            "snapshot_record_id must be a concrete positive record ID or None."
+        )
+
+    if source != "mavedb":
+        if (
+            acquisition is not None
+            or snapshot_record_id is not None
+            or include_superseded
+        ):
+            raise InvalidPipelineOptionError(
+                "Acquisition options are supported only for MaveDB."
+            )
+        return "native"
+
+    method = acquisition or "api"
+    if method == "snapshot":
+        if (
+            snapshot_record_id is None
+            or re.fullmatch(r"[1-9][0-9]*", snapshot_record_id) is None
+        ):
+            raise InvalidPipelineOptionError(
+                "Snapshot acquisition requires a concrete positive "
+                "snapshot_record_id; 'latest' is not allowed."
+            )
+        return method
+
+    if snapshot_record_id is not None:
+        raise InvalidPipelineOptionError(
+            "snapshot_record_id requires acquisition='snapshot'."
+        )
+    if include_superseded:
+        raise InvalidPipelineOptionError(
+            "include_superseded requires acquisition='snapshot'."
+        )
+    return method
 
 
 def _validate_dataset_batch_request(
@@ -410,6 +535,101 @@ def _download_mavedb_batch(
             )
         )
     return tuple(entries)
+
+
+def _download_mavedb_snapshot_batch(
+    plan: _DatasetBatchPlan,
+    *,
+    snapshot_record_id: str,
+    cache: FilesystemCache,
+    refresh: bool,
+    drop_failed: bool,
+    add_wildtype_row: bool,
+    overwrite: bool,
+    include_superseded: bool,
+) -> tuple[
+    tuple[DatasetBatchDownloadEntry, ...],
+    dict[str, Mapping[str, Any]],
+]:
+    """Acquire snapshot tables once and independently build each dataset."""
+    try:
+        acquisition = acquire_cached_mavedb_snapshot_datasets(
+            snapshot_record_id,
+            plan.dataset_ids,
+            cache=cache,
+            include_superseded=include_superseded,
+            refresh=refresh,
+        )
+    except _EXPECTED_DOWNLOAD_ERRORS as exc:
+        return (
+            tuple(
+                _failed_batch_entry(
+                    "mavedb",
+                    dataset_id,
+                    output_dir,
+                    exc,
+                )
+                for dataset_id, output_dir in zip(
+                    plan.dataset_ids,
+                    plan.output_dirs,
+                    strict=True,
+                )
+            ),
+            {
+                dataset_id: _empty_snapshot_provenance(snapshot_record_id)
+                for dataset_id in plan.dataset_ids
+            },
+        )
+
+    datasets = {
+        dataset.dataset_id: dataset
+        for dataset in acquisition.datasets
+    }
+    errors = dict(acquisition.errors)
+    provenance = dict(acquisition.provenance)
+    entries: list[DatasetBatchDownloadEntry] = []
+    for dataset_id, output_dir in zip(
+        plan.dataset_ids,
+        plan.output_dirs,
+        strict=True,
+    ):
+        error = errors.get(dataset_id)
+        if error is not None:
+            entries.append(
+                _failed_batch_entry("mavedb", dataset_id, output_dir, error)
+            )
+            continue
+        try:
+            built_table, summary = _build_mavedb_download(
+                dataset_id,
+                _snapshot_download_input(datasets[dataset_id]),
+                drop_failed=drop_failed,
+                add_wildtype_row=add_wildtype_row,
+            )
+            result = _publish_download_result(
+                built_table,
+                summary,
+                output_dir=output_dir,
+                output_paths=_preflight_dataset_bundle(
+                    output_dir,
+                    overwrite=overwrite,
+                ),
+                overwrite=overwrite,
+            )
+        except _EXPECTED_DOWNLOAD_ERRORS as exc:
+            entries.append(
+                _failed_batch_entry("mavedb", dataset_id, output_dir, exc)
+            )
+            continue
+        entries.append(
+            _successful_batch_entry(
+                "mavedb",
+                dataset_id,
+                output_dir,
+                result,
+            )
+        )
+    return tuple(entries), provenance
 
 
 def _download_proteingym_batch(
@@ -703,15 +923,57 @@ def _download_mavedb_dataset(
     drop_failed: bool,
     add_wildtype_row: bool,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Acquire and build one MaveDB substitutions score set."""
+    """Acquire one MaveDB score set from the API and build it."""
+    acquired = _acquire_mavedb_api_dataset(
+        dataset_id,
+        cache=cache,
+        refresh=refresh,
+    )
+    return _build_mavedb_download(
+        dataset_id,
+        acquired,
+        drop_failed=drop_failed,
+        add_wildtype_row=add_wildtype_row,
+    )
+
+
+def _download_mavedb_snapshot_dataset(
+    dataset_id: str,
+    *,
+    snapshot_record_id: str,
+    cache: FilesystemCache,
+    refresh: bool,
+    drop_failed: bool,
+    add_wildtype_row: bool,
+    include_superseded: bool,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Acquire one MaveDB score set from a cached snapshot and build it."""
+    acquisition = acquire_cached_mavedb_snapshot_datasets(
+        snapshot_record_id,
+        (dataset_id,),
+        cache=cache,
+        include_superseded=include_superseded,
+        refresh=refresh,
+    )
+    if acquisition.errors:
+        raise acquisition.errors[0][1]
+    return _build_mavedb_download(
+        dataset_id,
+        _snapshot_download_input(acquisition.datasets[0]),
+        drop_failed=drop_failed,
+        add_wildtype_row=add_wildtype_row,
+    )
+
+
+def _acquire_mavedb_api_dataset(
+    dataset_id: str,
+    *,
+    cache: FilesystemCache,
+    refresh: bool,
+) -> _MaveDBDownloadInput:
+    """Return API metadata and score-table inputs without building them."""
     metadata_record = _get_mavedb_download_metadata(dataset_id)
     metadata = metadata_record.raw_metadata
-    wt_sequence = _extract_wt_from_metadata(metadata)
-    if wt_sequence is None:
-        raise MissingWildTypeError(
-            f"No WT sequence found in MaveDB metadata for {dataset_id}."
-        )
-
     encoded_id = quote(dataset_id, safe=":")
     scores_url = (
         f"{MAVEDB_API_URL.rstrip('/')}/score-sets/{encoded_id}/scores"
@@ -722,7 +984,40 @@ def _download_mavedb_dataset(
         dataset_id=dataset_id,
         refresh=refresh,
     )
-    raw_table = read_table(scores_path)
+    return _MaveDBDownloadInput(
+        scores_path=scores_path,
+        metadata=metadata,
+        provenance={},
+    )
+
+
+def _snapshot_download_input(
+    dataset: MaveDBSnapshotDataset,
+) -> _MaveDBDownloadInput:
+    """Adapt private snapshot acquisition to the common builder input."""
+    return _MaveDBDownloadInput(
+        scores_path=dataset.scores_path,
+        metadata=dataset.metadata,
+        provenance=dataset.provenance,
+    )
+
+
+def _build_mavedb_download(
+    dataset_id: str,
+    acquired: _MaveDBDownloadInput,
+    *,
+    drop_failed: bool,
+    add_wildtype_row: bool,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Build API or snapshot inputs through the existing MaveDB builder."""
+    metadata = acquired.metadata
+    wt_sequence = _extract_wt_from_metadata(metadata)
+    if wt_sequence is None:
+        raise MissingWildTypeError(
+            f"No WT sequence found in MaveDB metadata for {dataset_id}."
+        )
+
+    raw_table = read_table(acquired.scores_path)
     hgvs_col = next(
         (column for column in ("hgvs_pro",) if column in raw_table.columns),
         None,
@@ -743,7 +1038,7 @@ def _download_mavedb_dataset(
     gene = _mavedb_gene(metadata)
     uniprot_id = _mavedb_uniprot_id(metadata)
     built_table = build_mavedb_dataset(
-        input_path=scores_path,
+        input_path=acquired.scores_path,
         score_col=score_col,
         hgvs_col=hgvs_col,
         dataset_id=dataset_id,
@@ -758,7 +1053,7 @@ def _download_mavedb_dataset(
         validate_output=True,
         require_wt_for_transforms=False,
     )
-    return built_table, _successful_download_summary(
+    summary = _successful_download_summary(
         source="mavedb",
         dataset_id=dataset_id,
         target_protein=_mavedb_target_protein(metadata, gene),
@@ -766,6 +1061,8 @@ def _download_mavedb_dataset(
         raw_rows=len(raw_table),
         built_table=built_table,
     )
+    summary.update(acquired.provenance)
+    return built_table, summary
 
 
 def _get_mavedb_download_metadata(dataset_id: str) -> DatasetRecord:
@@ -872,10 +1169,27 @@ def _failed_batch_entry(
     )
 
 
+def _empty_snapshot_provenance(record_id: str) -> dict[str, Any]:
+    """Return stable null provenance when a cached snapshot cannot load."""
+    return {
+        "acquisition_method": "snapshot",
+        "snapshot_record_id": record_id,
+        "snapshot_doi": None,
+        "snapshot_concept_doi": None,
+        "snapshot_publication_date": None,
+        "snapshot_archive_filename": None,
+        "snapshot_archive_size": None,
+        "snapshot_archive_checksum": None,
+        "snapshot_catalog_as_of": None,
+        "snapshot_score_set_superseded": None,
+    }
+
+
 def _batch_summary_record(
     entry: DatasetBatchDownloadEntry,
     *,
     batch_root: Path,
+    provenance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return one stable aggregate record with batch-root-relative paths."""
     relative_output_dir = entry.output_dir.relative_to(batch_root).as_posix()
@@ -916,6 +1230,7 @@ def _batch_summary_record(
         "synthetic_wildtype_rows": summary.get(
             "synthetic_wildtype_rows"
         ),
+        **(provenance or {}),
         "error_type": entry.error_type,
         "error": entry.error,
     }

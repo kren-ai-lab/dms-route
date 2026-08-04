@@ -1707,6 +1707,12 @@ def test_download_help_excludes_deferred_options(
     output = capsys.readouterr().out
     assert "--variant-type" not in output
     assert "--keep-failed" not in output
+    assert "--acquisition {api,snapshot}" in output
+    assert "--snapshot-record" in output
+    assert "--include-superseded" in output
+    assert "MaveDB-only" in output
+    assert "prefetched" in output
+    assert "1.9 GB" in output
 
 
 @pytest.mark.parametrize(
@@ -1750,6 +1756,76 @@ def test_download_rejects_source_ids_before_side_effects(
 
     assert exc_info.value.code == 2
     assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("command", ["download", "download-many"])
+@pytest.mark.parametrize(
+    ("source", "extra"),
+    [
+        ("mavedb", ["--acquisition", "snapshot"]),
+        (
+            "mavedb",
+            ["--acquisition", "api", "--snapshot-record", "20840937"],
+        ),
+        ("mavedb", ["--include-superseded"]),
+        ("proteingym", ["--acquisition", "api"]),
+        (
+            "proteingym",
+            [
+                "--acquisition",
+                "snapshot",
+                "--snapshot-record",
+                "20840937",
+            ],
+        ),
+        (
+            "mavedb",
+            ["--acquisition", "snapshot", "--snapshot-record", "latest"],
+        ),
+    ],
+)
+def test_download_acquisition_options_fail_before_side_effects(
+    command: str,
+    source: str,
+    extra: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forbidden = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("invalid acquisition constructed a cache or downloaded")
+    )
+    monkeypatch.setattr(cli_module, "FilesystemCache", forbidden)
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_datasets",
+        forbidden,
+    )
+    dataset_id = (
+        "urn:mavedb:00000001-a-1"
+        if source == "mavedb"
+        else "ASSAY_1"
+    )
+    arguments = [
+        command,
+        "--source",
+        source,
+        "--dataset-id",
+        dataset_id,
+        "--output-dir",
+        str(tmp_path / "output"),
+        *extra,
+    ]
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(arguments)
+
+    assert exc_info.value.code == 2
+    assert not (tmp_path / "output").exists()
 
 
 def test_download_forwards_defaults_and_uses_default_cache(
@@ -1799,6 +1875,9 @@ def test_download_forwards_defaults_and_uses_default_cache(
         "drop_failed": False,
         "add_wildtype_row": False,
         "overwrite": False,
+        "acquisition": None,
+        "snapshot_record_id": None,
+        "include_superseded": False,
     }
     assert isinstance(calls["cache"], FilesystemCache)
     assert calls["cache"].root == cache_root
@@ -1844,6 +1923,11 @@ def test_download_forwards_explicit_options_and_expands_paths(
             "--drop-failed",
             "--add-wildtype-row",
             "--overwrite",
+            "--acquisition",
+            "snapshot",
+            "--snapshot-record",
+            "20840937",
+            "--include-superseded",
             "--log-level",
             "DEBUG",
         ]
@@ -1857,6 +1941,9 @@ def test_download_forwards_explicit_options_and_expands_paths(
     assert calls["drop_failed"] is True
     assert calls["add_wildtype_row"] is True
     assert calls["overwrite"] is True
+    assert calls["acquisition"] == "snapshot"
+    assert calls["snapshot_record_id"] == "20840937"
+    assert calls["include_superseded"] is True
     assert len(logging_calls) == 1
     assert logging_calls[0]["level"] == logging.DEBUG
     assert "stream" not in logging_calls[0]
@@ -1957,6 +2044,10 @@ def test_download_many_help_excludes_deferred_options(
         "--query",
     ):
         assert option not in output
+    assert "--acquisition {api,snapshot}" in output
+    assert "--snapshot-record" in output
+    assert "--include-superseded" in output
+    assert "1.9 GB" in output
 
 
 @pytest.mark.parametrize(
@@ -2074,6 +2165,9 @@ def test_download_many_forwards_defaults_order_and_default_cache(
     assert calls["drop_failed"] is False
     assert calls["add_wildtype_row"] is False
     assert calls["overwrite"] is False
+    assert calls["acquisition"] is None
+    assert calls["snapshot_record_id"] is None
+    assert calls["include_superseded"] is False
     assert not cache_root.exists()
     assert capsys.readouterr().out == ""
 
@@ -2112,6 +2206,11 @@ def test_download_many_forwards_explicit_options_and_expands_paths(
             "--drop-failed",
             "--add-wildtype-row",
             "--overwrite",
+            "--acquisition",
+            "snapshot",
+            "--snapshot-record",
+            "20840937",
+            "--include-superseded",
             "--log-level",
             "DEBUG",
         ]
@@ -2123,6 +2222,9 @@ def test_download_many_forwards_explicit_options_and_expands_paths(
     assert calls["drop_failed"] is True
     assert calls["add_wildtype_row"] is True
     assert calls["overwrite"] is True
+    assert calls["acquisition"] == "snapshot"
+    assert calls["snapshot_record_id"] == "20840937"
+    assert calls["include_superseded"] is True
     assert logging_calls[0]["level"] == logging.DEBUG
 
 

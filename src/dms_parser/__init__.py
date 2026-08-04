@@ -88,6 +88,7 @@ from dms_parser.sources.mavedb_snapshots import (
     MaveDBSnapshot,
     MaveDBSnapshotRecord,
     fetch_mavedb_snapshot,
+    load_cached_mavedb_snapshot,
     resolve_mavedb_snapshot,
 )
 from dms_parser.sources.mavedb_snapshot_tables import (
@@ -129,6 +130,7 @@ __all__ = [
     "MaveDBSnapshot",
     "MaveDBSnapshotRecord",
     "fetch_mavedb_snapshot",
+    "load_cached_mavedb_snapshot",
     "resolve_mavedb_snapshot",
     "MaveDBBulkCatalog",
     "MaveDBDiscoveredExperiment",

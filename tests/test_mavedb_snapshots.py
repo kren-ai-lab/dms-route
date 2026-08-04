@@ -28,6 +28,7 @@ from dms_parser.sources.mavedb_snapshots import (
     MaveDBSnapshot,
     MaveDBSnapshotRecord,
     fetch_mavedb_snapshot,
+    load_cached_mavedb_snapshot,
     resolve_mavedb_snapshot,
 )
 
@@ -491,6 +492,61 @@ def test_pinned_valid_cache_is_reused_without_network(tmp_path: Path) -> None:
     assert session.calls == []
 
 
+def test_cache_only_snapshot_load_never_resolves_or_fetches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, cache, _ = _fetch_tar(tmp_path)
+    monkeypatch.setattr(
+        snapshots_module,
+        "resolve_mavedb_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cache-only load resolved Zenodo")
+        ),
+    )
+    monkeypatch.setattr(
+        snapshots_module,
+        "fetch_mavedb_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cache-only load fetched a snapshot")
+        ),
+    )
+
+    loaded = load_cached_mavedb_snapshot(20840937, cache=cache)
+
+    assert loaded.record == first.record
+    assert loaded.archive_path == first.archive_path
+    assert loaded.main_json_path == first.main_json_path
+    assert loaded.cache_hit is True
+
+
+def test_cache_only_snapshot_requires_cached_concrete_record(
+    tmp_path: Path,
+) -> None:
+    cache = FilesystemCache(tmp_path / "cache")
+    with pytest.raises(InvalidSnapshotSelectorError, match="concrete positive"):
+        load_cached_mavedb_snapshot("latest", cache=cache)
+    with pytest.raises(MaveDBSnapshotError, match="snapshot fetch --record 99"):
+        load_cached_mavedb_snapshot("99", cache=cache)
+
+
+@pytest.mark.parametrize("corrupt", ["metadata", "archive", "main"])
+def test_cache_only_snapshot_rejects_corrupt_cached_files(
+    corrupt: str,
+    tmp_path: Path,
+) -> None:
+    snapshot, cache, _ = _fetch_tar(tmp_path)
+    paths = {
+        "metadata": snapshot.archive_path.parent / "snapshot.json",
+        "archive": snapshot.archive_path,
+        "main": snapshot.main_json_path,
+    }
+    paths[corrupt].write_bytes(b"corrupt")
+
+    with pytest.raises(MaveDBSnapshotError):
+        load_cached_mavedb_snapshot("20840937", cache=cache)
+
+
 def test_latest_resolves_concrete_id_before_reusing_cache(tmp_path: Path) -> None:
     first, cache, archive = _fetch_tar(tmp_path)
     session = FakeSession(FakeResponse(json_value=_zenodo_payload(archive)))
@@ -648,6 +704,7 @@ def test_public_snapshot_exports_are_identical_and_records_are_frozen(
         "MaveDBSnapshot",
         "MaveDBSnapshotRecord",
         "fetch_mavedb_snapshot",
+        "load_cached_mavedb_snapshot",
         "resolve_mavedb_snapshot",
     )
     for name in names:

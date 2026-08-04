@@ -226,6 +226,25 @@ def test_score_set_lookup_returns_current_superseded_and_missing_records(
     assert catalog.get_score_set("urn:mavedb:99999999-a-1") is None
 
 
+def test_score_set_metadata_is_normalized_detached_and_not_public_record_state(
+    tmp_path: Path,
+) -> None:
+    catalog = _catalog(tmp_path)
+    dataset_id = "urn:mavedb:00000002-a-2"
+
+    first = catalog.get_score_set_metadata(dataset_id)
+    second = catalog.get_score_set_metadata(dataset_id)
+
+    assert first is not None
+    assert second is not None
+    assert first["urn"] == dataset_id
+    assert first == second
+    assert first is not second
+    first["targetGenes"][0]["name"] = "mutated"
+    assert catalog.get_score_set_metadata(dataset_id) == second
+    assert catalog.get_score_set_metadata("urn:mavedb:99999999-a-1") is None
+
+
 @pytest.mark.parametrize(
     "dataset_id",
     ["", "invalid", "urn:mavedb:00000002-A-1", True, None],

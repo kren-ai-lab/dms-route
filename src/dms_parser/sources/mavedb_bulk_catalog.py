@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from collections.abc import Mapping
@@ -10,6 +11,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from dms_parser.catalog import normalize_raw_metadata
 from dms_parser.exceptions import (
     CatalogError,
     InvalidCatalogQueryError,
@@ -66,6 +68,7 @@ class _IndexedScoreSet:
     experiment_id: str
     experiment_title: str | None
     record: MaveDBDiscoveredScoreSet
+    metadata: dict[str, Any]
 
 
 class MaveDBBulkCatalog:
@@ -86,6 +89,12 @@ class MaveDBBulkCatalog:
         self._score_set_index = MappingProxyType(
             {
                 indexed.record.dataset_id: indexed.record
+                for indexed in score_sets
+            }
+        )
+        self._score_set_metadata_index = MappingProxyType(
+            {
+                indexed.record.dataset_id: indexed.metadata
                 for indexed in score_sets
             }
         )
@@ -204,6 +213,15 @@ class MaveDBBulkCatalog:
             raise InvalidCatalogQueryError(str(exc)) from exc
         return self._score_set_index.get(dataset_id)
 
+    def get_score_set_metadata(
+        self,
+        dataset_id: str,
+    ) -> dict[str, Any] | None:
+        """Return a detached normalized score-set metadata object by URN."""
+        self.get_score_set(dataset_id)
+        metadata = self._score_set_metadata_index.get(dataset_id)
+        return copy.deepcopy(metadata) if metadata is not None else None
+
 
 def _validate_path(path: object) -> Path:
     """Return a supported non-empty filesystem path argument."""
@@ -314,6 +332,7 @@ def _validate_and_index(
                     MaveDBDiscoveredScoreSet,
                     tuple[str, ...],
                     tuple[str, ...],
+                    dict[str, Any],
                 ]
             ] = []
             for score_set_index, raw_score_set in enumerate(raw_score_sets):
@@ -377,6 +396,7 @@ def _validate_and_index(
                         ),
                         tuple(sorted(names)),
                         tuple(sorted(identifiers)),
+                        normalize_raw_metadata(score_set),
                     )
                 )
 
@@ -388,7 +408,7 @@ def _validate_and_index(
                     f"missing from scoreSets: {missing}."
                 )
 
-            for record, names, identifiers in pending:
+            for record, names, identifiers, metadata in pending:
                 index = len(indexed_score_sets)
                 indexed_score_sets.append(
                     _IndexedScoreSet(
@@ -396,6 +416,7 @@ def _validate_and_index(
                         experiment_id=experiment_id,
                         experiment_title=experiment_title,
                         record=record,
+                        metadata=metadata,
                     )
                 )
                 name_index.extend((name, index) for name in names)

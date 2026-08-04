@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import inspect
+import zipfile
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,8 @@ import dms_parser
 import dms_parser.downloads as downloads_module
 import dms_parser.fetch as fetch_module
 import dms_parser.pipeline as pipeline_module
+import dms_parser.sources._mavedb_snapshot_dataset as snapshot_dataset_module
+import dms_parser.sources.mavedb_snapshot_tables as snapshot_tables_module
 from dms_parser import (
     DatasetBatchDownloadEntry,
     DatasetBatchDownloadResult,
@@ -27,12 +31,93 @@ from dms_parser import (
 from dms_parser.exceptions import (
     DatasetNotFoundError,
     DownloadError,
+    InvalidDatasetError,
     InvalidPipelineOptionError,
     SourceConfigurationError,
 )
+from dms_parser.sources.mavedb_snapshots import MAVEDB_ZENODO_CONCEPT_DOI
 from dms_parser.sources.proteingym_catalog import (
     PROTEINGYM_SUBSTITUTIONS_CACHE_ID,
 )
+
+
+def _write_cached_snapshot(
+    tmp_path: Path,
+    score_sets: list[dict[str, Any]],
+    *,
+    current_ids: list[str],
+) -> FilesystemCache:
+    """Write one tiny fully valid cached ZIP snapshot without network I/O."""
+    cache = FilesystemCache(tmp_path / "cache")
+    record_id = "20840937"
+    entry = cache.root / "mavedb" / "snapshots" / record_id
+    entry.mkdir(parents=True)
+    main = {
+        "title": "Offline test snapshot",
+        "asOf": "2026-06-24T18:13:01Z",
+        "experimentSets": [
+            {
+                "urn": "urn:mavedb:00000001",
+                "experiments": [
+                    {
+                        "urn": "urn:mavedb:00000001-a",
+                        "title": "Offline experiment",
+                        "scoreSetUrns": current_ids,
+                        "scoreSets": score_sets,
+                    }
+                ],
+            }
+        ],
+    }
+    main_bytes = (json.dumps(main, sort_keys=True) + "\n").encode("utf-8")
+    main_path = entry / "main.json"
+    main_path.write_bytes(main_bytes)
+    archive_path = entry / "mavedb-dump.test.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("snapshot/main.json", main_bytes)
+        for score_set in score_sets:
+            stem = score_set["urn"].replace(":", "-")
+            archive.writestr(
+                f"csv/{stem}.scores.csv",
+                "hgvs_pro,score,source_note\n"
+                "p.=,1.0,snapshot\n"
+                "p.Met1Ala,0.5,snapshot\n"
+                "p.Gly2del,-1.0,snapshot\n",
+            )
+            archive.writestr(
+                f"csv/{stem}.counts.csv",
+                "hgvs_pro,count\np.=,10\n",
+            )
+    archive_bytes = archive_path.read_bytes()
+    metadata = {
+        "record_id": record_id,
+        "doi": f"10.5281/zenodo.{record_id}",
+        "concept_doi": MAVEDB_ZENODO_CONCEPT_DOI,
+        "publication_date": "2026-06-24",
+        "archive_filename": archive_path.name,
+        "archive_size": len(archive_bytes),
+        "checksum": f"md5:{hashlib.md5(archive_bytes).hexdigest()}",
+        "download_url": "https://zenodo.org/offline-test",
+        "archive_format": "zip",
+        "main_json_size": len(main_bytes),
+        "main_json_sha256": hashlib.sha256(main_bytes).hexdigest(),
+    }
+    (entry / "snapshot.json").write_text(
+        json.dumps(metadata, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return cache
+
+
+def _snapshot_score_set(dataset_id: str, *, gene: str = "GENE") -> dict[str, Any]:
+    """Return score-set metadata accepted by discovery and builders."""
+    return {
+        "urn": dataset_id,
+        "title": f"{gene} score set",
+        "numVariants": 3,
+        "targetGenes": [{"name": gene}],
+        "targetSequence": {"sequence": "MKT"},
+    }
 
 
 def test_download_api_is_public() -> None:
@@ -48,6 +133,17 @@ def test_download_api_is_public() -> None:
         public_value = getattr(dms_parser, name)
         assert public_value is getattr(downloads_module, name)
         assert public_value is getattr(pipeline_module, name)
+
+    for function_name in (
+        "download_and_standardize_dataset",
+        "download_and_standardize_datasets",
+    ):
+        parameters = inspect.signature(
+            getattr(downloads_module, function_name)
+        ).parameters
+        assert parameters["acquisition"].default is None
+        assert parameters["snapshot_record_id"].default is None
+        assert parameters["include_superseded"].default is False
 
 
 def test_download_collision_preflight_precedes_acquisition_and_output(
@@ -79,6 +175,59 @@ def test_download_collision_preflight_precedes_acquisition_and_output(
     assert existing.read_text(encoding="utf-8") == "existing"
     assert not cache.root.exists()
     assert list(output_dir.iterdir()) == [existing]
+
+
+@pytest.mark.parametrize(
+    ("source", "options"),
+    [
+        ("mavedb", {"acquisition": "snapshot"}),
+        ("mavedb", {"acquisition": "snapshot", "snapshot_record_id": "latest"}),
+        ("mavedb", {"acquisition": "api", "snapshot_record_id": "20840937"}),
+        ("mavedb", {"include_superseded": True}),
+        ("proteingym", {"acquisition": "api"}),
+        (
+            "proteingym",
+            {"acquisition": "snapshot", "snapshot_record_id": "20840937"},
+        ),
+    ],
+)
+def test_acquisition_validation_precedes_cache_output_and_source_work(
+    source: str,
+    options: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        downloads_module,
+        "_preflight_dataset_bundle",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid acquisition reached output preflight")
+        ),
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid acquisition reached source metadata")
+        ),
+    )
+    dataset_id = (
+        "urn:mavedb:00000001-a-1"
+        if source == "mavedb"
+        else "ASSAY_1"
+    )
+
+    with pytest.raises(InvalidPipelineOptionError):
+        download_and_standardize_dataset(
+            source,
+            dataset_id,
+            output_dir=tmp_path / "output",
+            cache=FilesystemCache(tmp_path / "cache"),
+            **options,
+        )
+
+    assert not (tmp_path / "output").exists()
+    assert not (tmp_path / "cache").exists()
 
 
 def test_unknown_download_publishes_no_error_bundle(
@@ -339,6 +488,120 @@ def test_mavedb_download_caches_scores_and_preserves_builder_behavior(
         refresh=True,
     )
     assert len(download_calls) == 2
+
+
+def test_snapshot_single_uses_offline_tables_common_builder_and_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-1"
+    metadata = _snapshot_score_set(dataset_id, gene="SNAPGENE")
+    cache = _write_cached_snapshot(
+        tmp_path,
+        [metadata],
+        current_ids=[dataset_id],
+    )
+    forbidden = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("snapshot standardization contacted live MaveDB")
+    )
+    monkeypatch.setattr(downloads_module, "get_dataset_metadata", forbidden)
+    monkeypatch.setattr(downloads_module, "download_mavedb_dataset", forbidden)
+    monkeypatch.setattr(
+        snapshot_dataset_module,
+        "fetch_mavedb_snapshot",
+        forbidden,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        snapshot_dataset_module,
+        "resolve_mavedb_snapshot",
+        forbidden,
+        raising=False,
+    )
+
+    first = download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "snapshot-first",
+        cache=cache,
+        acquisition="snapshot",
+        snapshot_record_id="20840937",
+    )
+    second = download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "snapshot-second",
+        cache=cache,
+        acquisition="snapshot",
+        snapshot_record_id="20840937",
+    )
+
+    first_table = pd.read_csv(first.dataset_path)
+    assert first_table["score_raw"].tolist() == [1.0, 0.5, -1.0]
+    assert first_table["status"].tolist() == ["OK", "OK", "Unsupported"]
+    assert first_table["is_synthetic"].tolist() == [False, False, False]
+    assert first_table["mutated_sequence"].iloc[0] == "MKT"
+    assert str(first_table["score_raw"].dtype) == "float64"
+    assert first.dataset_path.read_bytes() == second.dataset_path.read_bytes()
+    assert sorted(path.name for path in first.dataset_path.parent.iterdir()) == [
+        "standardized.csv",
+        "summary.csv",
+        "summary.json",
+    ]
+    assert not any(
+        path.name in {"scores.csv", "counts.csv"}
+        for path in first.dataset_path.parent.iterdir()
+    )
+
+    provenance_fields = [
+        "acquisition_method",
+        "snapshot_record_id",
+        "snapshot_doi",
+        "snapshot_concept_doi",
+        "snapshot_publication_date",
+        "snapshot_archive_filename",
+        "snapshot_archive_size",
+        "snapshot_archive_checksum",
+        "snapshot_catalog_as_of",
+        "snapshot_score_set_superseded",
+    ]
+    assert list(first.summary)[-11:-1] == provenance_fields
+    assert first.summary["acquisition_method"] == "snapshot"
+    assert first.summary["snapshot_record_id"] == "20840937"
+    assert first.summary["snapshot_catalog_as_of"] == "2026-06-24T18:13:01Z"
+    assert first.summary["snapshot_score_set_superseded"] is False
+    assert {
+        key: first.summary[key]
+        for key in provenance_fields
+    } == {
+        key: second.summary[key]
+        for key in provenance_fields
+    }
+
+    extracted_scores = next(
+        cache.root.glob("mavedb/snapshot_tables/20840937/*/scores.csv")
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "_acquire_mavedb_api_dataset",
+        lambda *args, **kwargs: downloads_module._MaveDBDownloadInput(
+            scores_path=extracted_scores,
+            metadata=metadata,
+            provenance={},
+        ),
+    )
+    api = download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "api-equivalent",
+        cache=cache,
+        acquisition="api",
+    )
+    pd.testing.assert_frame_equal(
+        first_table,
+        pd.read_csv(api.dataset_path),
+        check_dtype=True,
+    )
 
 
 def _batch_metadata_record(dataset_id: str) -> DatasetRecord:
@@ -708,6 +971,200 @@ def test_mavedb_batch_reuses_cache_and_refreshes_each_unique_urn_once(
     assert all(cache.exists("mavedb", dataset_id) for dataset_id in dataset_ids)
     first_table = pd.read_csv(first.entries[0].result.dataset_path)  # type: ignore[union-attr]
     assert first_table["is_synthetic"].tolist() == [True, False]
+
+
+def test_snapshot_batch_acquires_once_isolates_catalog_outcomes_and_refreshes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_id = "urn:mavedb:00000001-a-1"
+    superseded_id = "urn:mavedb:00000001-a-2"
+    missing_id = "urn:mavedb:00000001-a-3"
+    dataset_ids = (current_id, superseded_id, missing_id)
+    cache = _write_cached_snapshot(
+        tmp_path,
+        [
+            _snapshot_score_set(current_id, gene="CURRENT"),
+            _snapshot_score_set(superseded_id, gene="LEGACY"),
+        ],
+        current_ids=[current_id],
+    )
+    forbidden = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("snapshot batch contacted live MaveDB")
+    )
+    monkeypatch.setattr(downloads_module, "get_dataset_metadata", forbidden)
+    monkeypatch.setattr(downloads_module, "download_mavedb_dataset", forbidden)
+
+    load_calls = 0
+    extraction_calls: list[tuple[tuple[str, ...], bool, bool]] = []
+    archive_open_calls = 0
+    real_load = snapshot_dataset_module.load_cached_mavedb_snapshot
+    real_extract = snapshot_dataset_module.extract_mavedb_snapshot_tables
+    real_zip_file = snapshot_tables_module.zipfile.ZipFile
+
+    def load(*args: Any, **kwargs: Any):
+        nonlocal load_calls
+        load_calls += 1
+        return real_load(*args, **kwargs)
+
+    def extract(snapshot: Any, ids: Any, **kwargs: Any):
+        extraction_calls.append(
+            (tuple(ids), kwargs["include_superseded"], kwargs["refresh"])
+        )
+        return real_extract(snapshot, ids, **kwargs)
+
+    def open_zip(*args: Any, **kwargs: Any):
+        nonlocal archive_open_calls
+        archive_open_calls += 1
+        return real_zip_file(*args, **kwargs)
+
+    monkeypatch.setattr(
+        snapshot_dataset_module,
+        "load_cached_mavedb_snapshot",
+        load,
+    )
+    monkeypatch.setattr(
+        snapshot_dataset_module,
+        "extract_mavedb_snapshot_tables",
+        extract,
+    )
+    monkeypatch.setattr(snapshot_tables_module.zipfile, "ZipFile", open_zip)
+
+    first = download_and_standardize_datasets(
+        "mavedb",
+        dataset_ids,
+        output_dir=tmp_path / "first",
+        cache=cache,
+        acquisition="snapshot",
+        snapshot_record_id="20840937",
+    )
+    assert [entry.dataset_id for entry in first.entries] == list(dataset_ids)
+    assert [entry.error_type for entry in first.entries] == [
+        None,
+        "SupersededSnapshotDatasetError",
+        "SnapshotDatasetNotFoundError",
+    ]
+    assert first.success_count == 1
+    assert load_calls == 1
+    assert extraction_calls == [((current_id,), False, False)]
+    assert archive_open_calls == 1
+
+    second = download_and_standardize_datasets(
+        "mavedb",
+        dataset_ids,
+        output_dir=tmp_path / "second",
+        cache=cache,
+        acquisition="snapshot",
+        snapshot_record_id="20840937",
+        include_superseded=True,
+    )
+    assert [entry.dataset_id for entry in second.entries] == list(dataset_ids)
+    assert [entry.error_type for entry in second.entries] == [
+        None,
+        None,
+        "SnapshotDatasetNotFoundError",
+    ]
+    assert load_calls == 2
+    assert extraction_calls[-1] == (
+        (current_id, superseded_id),
+        True,
+        False,
+    )
+    assert archive_open_calls == 2
+
+    cache_hits = download_and_standardize_datasets(
+        "mavedb",
+        (current_id, superseded_id),
+        output_dir=tmp_path / "cache-hits",
+        cache=cache,
+        acquisition="snapshot",
+        snapshot_record_id="20840937",
+        include_superseded=True,
+    )
+    assert cache_hits.success_count == 2
+    assert archive_open_calls == 2
+
+    refreshed = download_and_standardize_datasets(
+        "mavedb",
+        (current_id, superseded_id),
+        output_dir=tmp_path / "refreshed",
+        cache=cache,
+        acquisition="snapshot",
+        snapshot_record_id="20840937",
+        include_superseded=True,
+        refresh=True,
+    )
+    assert refreshed.success_count == 2
+    assert extraction_calls[-1] == (
+        (current_id, superseded_id),
+        True,
+        True,
+    )
+    assert archive_open_calls == 3
+
+    records = json.loads(
+        second.summary_json_path.read_text(encoding="utf-8")
+    )
+    assert [record["dataset_id"] for record in records] == list(dataset_ids)
+    assert all(record["acquisition_method"] == "snapshot" for record in records)
+    assert records[0]["snapshot_score_set_superseded"] is False
+    assert records[1]["snapshot_score_set_superseded"] is True
+    assert records[2]["snapshot_score_set_superseded"] is None
+
+
+@pytest.mark.parametrize("failure_stage", ["builder", "publication"])
+def test_snapshot_batch_dataset_failure_preserves_successful_sibling(
+    failure_stage: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_ids = (
+        "urn:mavedb:00000001-a-1",
+        "urn:mavedb:00000001-a-2",
+    )
+    cache = _write_cached_snapshot(
+        tmp_path,
+        [_snapshot_score_set(dataset_id) for dataset_id in dataset_ids],
+        current_ids=list(dataset_ids),
+    )
+    real_build = downloads_module._build_mavedb_download
+    real_publish = downloads_module._publish_download_result
+    publish_calls = 0
+
+    def build(dataset_id: str, *args: Any, **kwargs: Any):
+        if failure_stage == "builder" and dataset_id == dataset_ids[1]:
+            raise InvalidDatasetError("offline builder failure")
+        return real_build(dataset_id, *args, **kwargs)
+
+    def publish(*args: Any, **kwargs: Any):
+        nonlocal publish_calls
+        publish_calls += 1
+        if failure_stage == "publication" and publish_calls == 2:
+            raise DownloadError("offline publication failure")
+        return real_publish(*args, **kwargs)
+
+    monkeypatch.setattr(downloads_module, "_build_mavedb_download", build)
+    monkeypatch.setattr(downloads_module, "_publish_download_result", publish)
+    result = download_and_standardize_datasets(
+        "mavedb",
+        dataset_ids,
+        output_dir=tmp_path / "output",
+        cache=cache,
+        acquisition="snapshot",
+        snapshot_record_id="20840937",
+    )
+
+    assert result.success_count == 1
+    assert result.failure_count == 1
+    assert result.entries[0].result is not None
+    assert result.entries[0].result.dataset_path.is_file()
+    expected_error = (
+        "InvalidDatasetError"
+        if failure_stage == "builder"
+        else "DownloadError"
+    )
+    assert result.entries[1].error_type == expected_error
+    assert not result.entries[1].output_dir.exists()
 
 
 def _write_fake_download_result(output_dir: Path) -> DatasetDownloadResult:

@@ -51,7 +51,7 @@ It is a **clean data + representation layer**.
 ### ✅ Dataset ingestion
 
 * ProteinGym substitution assays (CSV / parquet)
-* MaveDB (API-based download)
+* MaveDB (API-based or explicitly prefetched bulk-snapshot acquisition)
 
 ### ✅ Variant parsing
 
@@ -385,6 +385,46 @@ dms-parser download \
     --output-dir datasets/mavedb-00000097-a-1
 ```
 
+Standardized downloads support three acquisition models:
+
+| Source | Acquisition |
+| --- | --- |
+| ProteinGym | Shared bulk CSV/Parquet resources, then filter by `DMS_id` |
+| MaveDB default | Individual API acquisition by score-set URN |
+| MaveDB snapshot | Selected score tables from one explicitly prefetched, versioned snapshot |
+
+API mode remains the default and is preferable for one or a few MaveDB URNs.
+Snapshot mode is useful for larger batches, offline processing, and
+release-level reproducibility. First fetch the concrete snapshot explicitly;
+this command may download approximately 1.9 GB:
+
+```bash
+dms-parser snapshot fetch --record 20840937
+```
+
+Then standardize a selected score set entirely from that cached snapshot:
+
+```bash
+dms-parser download \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000097-a-1 \
+    --acquisition snapshot \
+    --snapshot-record 20840937 \
+    --output-dir datasets/mavedb-00000097-a-1
+```
+
+`download` never resolves or downloads the large snapshot implicitly. If the
+concrete record is absent or invalid in the cache, it reports the exact
+`snapshot fetch --record` command required. In snapshot mode, `--refresh`
+re-extracts selected raw tables from the already cached immutable archive; it
+does not contact Zenodo or reacquire the archive.
+
+`snapshot extract` returns raw archival tables. In contrast,
+`download --acquisition snapshot` feeds those cached score tables through the
+normal MaveDB builder and publishes the standard three-file dataset bundle.
+Counts tables remain optional raw data and are not used in standardization.
+ProteinGym is already bulk-first and needs no snapshot-build equivalent.
+
 Each successful command writes exactly this bundle:
 
 ```text
@@ -427,6 +467,23 @@ dms-parser download-many \
     --dataset-id urn:mavedb:00000100-a-1 \
     --output-dir datasets
 ```
+
+Use one prefetched MaveDB snapshot for a reproducible batch by repeating the
+existing singular `--dataset-id` option:
+
+```bash
+dms-parser download-many \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000097-a-1 \
+    --dataset-id urn:mavedb:00000100-a-1 \
+    --acquisition snapshot \
+    --snapshot-record 20840937 \
+    --output-dir datasets
+```
+
+The cached snapshot and its selected tables are shared across the batch while
+each standardized bundle is built and published independently. Superseded
+score sets require `--include-superseded`.
 
 Each ID receives a portable deterministic directory beneath the source. The
 directory name starts with `id-`, contains a sanitized form of the original

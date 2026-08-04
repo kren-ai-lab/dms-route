@@ -141,6 +141,32 @@ def fetch_mavedb_snapshot(
     )
 
 
+def load_cached_mavedb_snapshot(
+    record_id: str | int,
+    *,
+    cache: FilesystemCache | None = None,
+) -> MaveDBSnapshot:
+    """Load and fully validate one concrete cached MaveDB snapshot."""
+    selected_record_id = _validate_selector(record_id)
+    if selected_record_id is None:
+        raise InvalidSnapshotSelectorError(
+            "A concrete positive Zenodo record ID is required; "
+            "'latest' is not allowed."
+        )
+    if cache is not None and not isinstance(cache, FilesystemCache):
+        raise MaveDBSnapshotError("cache must be a FilesystemCache or None.")
+    resolved_cache = cache or FilesystemCache(
+        Path.home() / ".cache" / "dms-parser"
+    )
+    snapshot = _load_cached_snapshot(resolved_cache, selected_record_id)
+    if snapshot is None:
+        raise MaveDBSnapshotError(
+            f"MaveDB snapshot {selected_record_id} is not cached; run "
+            f"'dms-parser snapshot fetch --record {selected_record_id}' first."
+        )
+    return snapshot
+
+
 def _validate_selector(selector: object) -> str | None:
     """Return a concrete record ID, or ``None`` for the latest selector."""
     if isinstance(selector, bool):
@@ -798,5 +824,6 @@ __all__ = [
     "MaveDBSnapshot",
     "MaveDBSnapshotRecord",
     "fetch_mavedb_snapshot",
+    "load_cached_mavedb_snapshot",
     "resolve_mavedb_snapshot",
 ]

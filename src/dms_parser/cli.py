@@ -19,6 +19,7 @@ from dms_parser.cache import FilesystemCache
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
 from dms_parser.config import load_pipeline_config, validate_source_dataset_id
 from dms_parser.downloads import (
+    _validate_download_acquisition,
     _validate_dataset_batch_request,
     download_and_standardize_dataset,
     download_and_standardize_datasets,
@@ -205,6 +206,25 @@ def _add_download_options(
     parser.add_argument("--output-dir", required=True, type=_non_empty_path)
     parser.add_argument("--cache-dir", type=_non_empty_path)
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument(
+        "--acquisition",
+        choices=("api", "snapshot"),
+        help=(
+            "MaveDB-only acquisition backend. Snapshot mode requires a "
+            "prefetched concrete record and never downloads the approximately "
+            "1.9 GB archive implicitly."
+        ),
+    )
+    parser.add_argument(
+        "--snapshot-record",
+        type=_positive_record_id,
+        help="Concrete prefetched Zenodo record ID for snapshot acquisition.",
+    )
+    parser.add_argument(
+        "--include-superseded",
+        action="store_true",
+        help="Allow superseded score sets in MaveDB snapshot mode.",
+    )
     parser.add_argument("--drop-failed", action="store_true")
     parser.add_argument("--add-wildtype-row", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
@@ -471,7 +491,13 @@ def _download_command(args: argparse.Namespace) -> int:
     """Download and standardize one source dataset."""
     try:
         validate_source_dataset_id(args.source, args.dataset_id)
-    except SourceConfigurationError as exc:
+        _validate_download_acquisition(
+            args.source,
+            acquisition=args.acquisition,
+            snapshot_record_id=args.snapshot_record,
+            include_superseded=args.include_superseded,
+        )
+    except (SourceConfigurationError, InvalidPipelineOptionError) as exc:
         args.command_parser.error(str(exc))
 
     cache_root = _cache_root_from_args(args)
@@ -485,6 +511,9 @@ def _download_command(args: argparse.Namespace) -> int:
             drop_failed=args.drop_failed,
             add_wildtype_row=args.add_wildtype_row,
             overwrite=args.overwrite,
+            acquisition=args.acquisition,
+            snapshot_record_id=args.snapshot_record,
+            include_superseded=args.include_superseded,
         )
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("Dataset download failed: %s", exc)
@@ -503,6 +532,12 @@ def _download_many_command(args: argparse.Namespace) -> int:
     """Download and standardize an ordered batch from one source."""
     output_dir = args.output_dir.expanduser()
     try:
+        _validate_download_acquisition(
+            args.source,
+            acquisition=args.acquisition,
+            snapshot_record_id=args.snapshot_record,
+            include_superseded=args.include_superseded,
+        )
         _validate_dataset_batch_request(
             args.source,
             args.dataset_id,
@@ -529,6 +564,9 @@ def _download_many_command(args: argparse.Namespace) -> int:
             drop_failed=args.drop_failed,
             add_wildtype_row=args.add_wildtype_row,
             overwrite=args.overwrite,
+            acquisition=args.acquisition,
+            snapshot_record_id=args.snapshot_record,
+            include_superseded=args.include_superseded,
         )
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("Dataset batch download failed: %s", exc)
