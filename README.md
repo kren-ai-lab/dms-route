@@ -114,6 +114,7 @@ dms-parser download --help
 dms-parser download-many --help
 dms-parser snapshot --help
 dms-parser snapshot fetch --help
+dms-parser discover --help
 ```
 
 The CLI logs at `INFO` by default; pass `--log-level DEBUG` for diagnostic
@@ -170,9 +171,104 @@ The bulk archive can be approximately 1.9 GB. Downloads are streamed and
 published only after their exact Zenodo size and checksum are verified. The
 manager safely extracts only the regular `main.json` member from supported
 TAR.GZ or ZIP archives; score tables are not extracted. Neither the archive nor
-`main.json` is stored in this repository. Dataset discovery from the managed
-`main.json` will be added as a separate feature; snapshot fetching does not
-search, select, merge, or standardize datasets.
+`main.json` is stored in this repository.
+
+### Discover datasets in a MaveDB bulk snapshot
+
+`discover` searches a reproducible, already-extracted bulk `main.json`, not the
+live MaveDB API. Use an exact local file without network or snapshot-manager
+access:
+
+```bash
+dms-parser discover \
+    --main-json /data/mavedb/main.json \
+    --query BRCA1
+```
+
+Or let the existing snapshot manager resolve the latest version or a pinned
+Zenodo record:
+
+```bash
+dms-parser discover --snapshot latest --query BRCA1
+
+dms-parser discover \
+    --snapshot 20840937 \
+    --query BRCA1
+```
+
+An uncached managed snapshot may download an approximately 1.9 GB archive.
+Managed discovery uses the snapshot cache described above; `--cache-dir`
+changes its root and `--refresh` reacquires the selected snapshot. These two
+options are intentionally unavailable with `--main-json`.
+
+Text output groups only matching score sets under their experiments and exposes
+the score-set URNs needed by other commands:
+
+```text
+query: BRCA1
+snapshot_title: MaveDB public data dump
+as_of: 2026-06-24T18:13:01Z
+source: managed snapshot
+record_id: 20840937
+experiment_count: 1
+score_set_count: 1
+experiment: urn:mavedb:00000097-a
+  experiment_set: urn:mavedb:00000097
+  title: BRCA1 saturation editing
+  score_set: urn:mavedb:00000097-a-1
+    title: BRCA1 function scores
+    targets: BRCA1
+    n_variants: 3893
+    status: current
+```
+
+Use deterministic JSON on standard output or write it as UTF-8 to a file:
+
+```bash
+dms-parser discover \
+    --snapshot 20840937 \
+    --query BRCA1 \
+    --format json \
+    --output brca1-score-sets.json
+```
+
+The Python API loads, validates, and indexes the complete file once. Reuse one
+catalog for repeated searches without reopening or reparsing `main.json`:
+
+```python
+from dms_parser import MaveDBBulkCatalog
+
+catalog = MaveDBBulkCatalog.from_file("/data/mavedb/main.json")
+brca1 = catalog.search_by_gene("BRCA1")
+tp53 = catalog.search_by_gene("TP53")
+
+for experiment in brca1.experiments:
+    for score_set in experiment.score_sets:
+        print(score_set.dataset_id)
+```
+
+Score sets listed by an experiment's `scoreSetUrns` are current. Older nested
+score sets absent from that list are superseded, excluded by default, and
+marked explicitly when requested:
+
+```bash
+dms-parser discover \
+    --main-json /data/mavedb/main.json \
+    --query BRCA1 \
+    --include-superseded
+```
+
+Discovery only searches metadata. It does not download score tables, choose or
+merge alternatives, or make compatibility decisions. Pass a returned URN
+manually to the existing single- or multi-dataset download interface when
+appropriate:
+
+```bash
+dms-parser download \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000097-a-1 \
+    --output-dir datasets/mavedb-00000097-a-1
+```
 
 ### Download and standardize one dataset
 

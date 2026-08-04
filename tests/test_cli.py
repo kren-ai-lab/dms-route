@@ -17,6 +17,9 @@ from dms_parser import (
     DatasetDownloadResult,
     DatasetRecord,
     FilesystemCache,
+    MaveDBDiscoveredExperiment,
+    MaveDBDiscoveredScoreSet,
+    MaveDBDiscoveryResult,
     MaveDBSnapshot,
     MaveDBSnapshotRecord,
     PipelineResult,
@@ -52,7 +55,15 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
     [
         (
             ["--help"],
-            ("run", "list", "metadata", "download", "download-many", "snapshot"),
+            (
+                "run",
+                "list",
+                "metadata",
+                "download",
+                "download-many",
+                "snapshot",
+                "discover",
+            ),
         ),
         (["run", "--help"], ("--config", "--dry-run")),
         (["list", "--help"], ("--source", "--query", "--limit", "--format")),
@@ -70,6 +81,17 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
             ["snapshot", "fetch", "--help"],
             ("--latest", "--record", "--cache-dir", "--format"),
         ),
+        (
+            ["discover", "--help"],
+            (
+                "--main-json",
+                "--snapshot",
+                "--query",
+                "--include-superseded",
+                "--format",
+                "--output",
+            ),
+        ),
     ],
     ids=(
         "root",
@@ -80,6 +102,7 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
         "download-many",
         "snapshot",
         "snapshot-fetch",
+        "discover",
     ),
 )
 def test_help_exits_successfully(
@@ -174,6 +197,20 @@ def test_help_exits_successfully(
             "--latest",
             "--record",
             "20840937",
+        ],
+        ["discover"],
+        ["discover", "--main-json", "main.json"],
+        ["discover", "--main-json", "main.json", "--query", "   "],
+        ["discover", "--snapshot", "invalid", "--query", "BRCA1"],
+        ["discover", "--snapshot", "0", "--query", "BRCA1"],
+        [
+            "discover",
+            "--main-json",
+            "main.json",
+            "--snapshot",
+            "latest",
+            "--query",
+            "BRCA1",
         ],
     ],
 )
@@ -977,6 +1014,407 @@ def test_unexpected_snapshot_exception_propagates(
         cli_module.main(["snapshot", "fetch", "--latest"])
 
     assert exc_info.value is cause
+
+
+def _discovery_result(*, empty: bool = False) -> MaveDBDiscoveryResult:
+    """Return deterministic grouped discovery data for CLI tests."""
+    experiments: tuple[MaveDBDiscoveredExperiment, ...] = ()
+    if not empty:
+        experiments = (
+            MaveDBDiscoveredExperiment(
+                experiment_set_id="urn:mavedb:00000001-a",
+                experiment_id="urn:mavedb:00000001-a",
+                title="BRCA1 saturation editing",
+                score_sets=(
+                    MaveDBDiscoveredScoreSet(
+                        dataset_id="urn:mavedb:00000001-a-1",
+                        title="Current BRCA1 scores",
+                        n_variants=123,
+                        targets=("BRCA1", "P38398"),
+                        is_superseded=False,
+                    ),
+                    MaveDBDiscoveredScoreSet(
+                        dataset_id="urn:mavedb:00000001-a-2",
+                        title="Earlier BRCA1 scores",
+                        n_variants=None,
+                        targets=("BRCA1",),
+                        is_superseded=True,
+                    ),
+                ),
+            ),
+        )
+    return MaveDBDiscoveryResult(
+        query="BRCA1",
+        snapshot_title="MaveDB public data dump v5",
+        as_of="2026-06-24T18:13:01Z",
+        experiments=experiments,
+    )
+
+
+def _install_fake_discovery_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: dict[str, Any],
+    *,
+    empty: bool = False,
+) -> None:
+    """Install a catalog fake that records loading and search arguments."""
+
+    class FakeCatalog:
+        @classmethod
+        def from_file(cls, path: Path) -> FakeCatalog:
+            calls["catalog_path"] = path
+            return cls()
+
+        def search_by_gene(
+            self,
+            query: str,
+            *,
+            include_superseded: bool = False,
+        ) -> MaveDBDiscoveryResult:
+            calls["query"] = query
+            calls["include_superseded"] = include_superseded
+            return _discovery_result(empty=empty)
+
+    monkeypatch.setattr(cli_module, "MaveDBBulkCatalog", FakeCatalog)
+
+
+def _forbidden_discovery_side_effect(
+    *args: object,
+    **kwargs: object,
+) -> None:
+    """Fail when discovery invokes an unrelated side effect."""
+    raise AssertionError("discovery invoked a forbidden operation")
+
+
+def test_discover_local_forwards_search_and_renders_grouped_text(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: dict[str, Any] = {}
+    logging_calls: list[dict[str, Any]] = []
+    main_json = Path("~") / "snapshots" / "main.json"
+    _install_fake_discovery_catalog(monkeypatch, calls)
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_mavedb_snapshot",
+        _forbidden_discovery_side_effect,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        _forbidden_discovery_side_effect,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_datasets",
+        _forbidden_discovery_side_effect,
+    )
+    monkeypatch.setattr(
+        cli_module.logging,
+        "basicConfig",
+        lambda **kwargs: logging_calls.append(kwargs),
+    )
+
+    assert cli_module.main(
+        [
+            "discover",
+            "--main-json",
+            str(main_json),
+            "--query",
+            "  BrCa1  ",
+            "--include-superseded",
+            "--log-level",
+            "DEBUG",
+        ]
+    ) == 0
+
+    assert calls == {
+        "catalog_path": main_json.expanduser(),
+        "query": "  BrCa1  ",
+        "include_superseded": True,
+    }
+    assert logging_calls[0]["level"] == logging.DEBUG
+    output = capsys.readouterr().out
+    for text in (
+        "query: BRCA1",
+        "snapshot_title: MaveDB public data dump v5",
+        "as_of: 2026-06-24T18:13:01Z",
+        "source: local",
+        "experiment_count: 1",
+        "score_set_count: 2",
+        "experiment: urn:mavedb:00000001-a",
+        "experiment_set: urn:mavedb:00000001-a",
+        "score_set: urn:mavedb:00000001-a-1",
+        "targets: BRCA1, P38398",
+        "n_variants: 123",
+        "status: current",
+        "score_set: urn:mavedb:00000001-a-2",
+        "n_variants: -",
+        "status: superseded",
+    ):
+        assert text in output
+
+
+def test_discover_local_json_output_file_is_deterministic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: dict[str, Any] = {}
+    output_path = tmp_path / "nested" / "discovery.json"
+    main_json = tmp_path / "main.json"
+    _install_fake_discovery_catalog(monkeypatch, calls)
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_mavedb_snapshot",
+        _forbidden_discovery_side_effect,
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(
+        [
+            "discover",
+            "--main-json",
+            str(main_json),
+            "-q",
+            "BRCA1",
+            "--format",
+            "json",
+            "--output",
+            str(output_path),
+        ]
+    ) == 0
+
+    assert capsys.readouterr().out == ""
+    values = json.loads(output_path.read_text(encoding="utf-8"))
+    assert list(values) == [
+        "query",
+        "snapshot_title",
+        "as_of",
+        "experiment_count",
+        "score_set_count",
+        "source",
+        "experiments",
+    ]
+    assert values["source"] == {"kind": "local"}
+    assert str(main_json.resolve()) not in output_path.read_text(encoding="utf-8")
+    assert values["experiments"][0]["score_sets"][0]["targets"] == [
+        "BRCA1",
+        "P38398",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("selector", "extra_arguments", "expected_refresh"),
+    [
+        ("latest", [], False),
+        ("20840937", ["--refresh"], True),
+    ],
+)
+def test_discover_snapshot_fetches_once_and_preserves_provenance(
+    selector: str,
+    extra_arguments: list[str],
+    expected_refresh: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: dict[str, Any] = {"fetch_count": 0}
+    cache_root = tmp_path / "cache"
+    _install_fake_discovery_catalog(monkeypatch, calls)
+
+    def fetch(value: str, **kwargs: Any) -> MaveDBSnapshot:
+        calls["fetch_count"] += 1
+        calls["selector"] = value
+        calls["cache"] = kwargs["cache"]
+        calls["refresh"] = kwargs["refresh"]
+        return _snapshot_result(kwargs["cache"].root, cache_hit=True)
+
+    monkeypatch.setattr(cli_module, "fetch_mavedb_snapshot", fetch)
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        _forbidden_discovery_side_effect,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_datasets",
+        _forbidden_discovery_side_effect,
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+    arguments = [
+        "discover",
+        "--snapshot",
+        selector,
+        "--query",
+        "BRCA1",
+        "--cache-dir",
+        str(cache_root),
+        "--format",
+        "json",
+    ]
+
+    assert cli_module.main(arguments + extra_arguments) == 0
+
+    assert calls["fetch_count"] == 1
+    assert calls["selector"] == selector
+    assert calls["cache"].root == cache_root
+    assert calls["refresh"] is expected_refresh
+    assert calls["catalog_path"] == _snapshot_result(cache_root).main_json_path
+    values = json.loads(capsys.readouterr().out)
+    assert values["source"] == {
+        "kind": "snapshot",
+        "record_id": "20840937",
+        "doi": "10.5281/zenodo.20840937",
+        "concept_doi": "10.5281/zenodo.11201736",
+        "publication_date": "2026-06-24",
+        "filename": "mavedb-dump.test.tar.gz",
+        "size": 123,
+        "checksum": "md5:900150983cd24fb0d6963f7d28e17f72",
+    }
+    assert "cache_hit" not in values["source"]
+    assert "main_json_path" not in values["source"]
+
+
+@pytest.mark.parametrize("option", ["--refresh", "--cache-dir"])
+def test_discover_local_rejects_snapshot_options_before_side_effects(
+    option: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "FilesystemCache",
+        _forbidden_discovery_side_effect,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_mavedb_snapshot",
+        _forbidden_discovery_side_effect,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "MaveDBBulkCatalog",
+        _forbidden_discovery_side_effect,
+    )
+    arguments = [
+        "discover",
+        "--main-json",
+        str(tmp_path / "main.json"),
+        "--query",
+        "BRCA1",
+        option,
+    ]
+    if option == "--cache-dir":
+        arguments.append(str(tmp_path / "cache"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(arguments)
+
+    assert exc_info.value.code == 2
+
+
+def test_discover_empty_result_is_successful(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: dict[str, Any] = {}
+    _install_fake_discovery_catalog(monkeypatch, calls, empty=True)
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_mavedb_snapshot",
+        _forbidden_discovery_side_effect,
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(
+        [
+            "discover",
+            "--main-json",
+            str(tmp_path / "main.json"),
+            "--query",
+            "missing",
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert "experiment_count: 0" in output
+    assert "score_set_count: 0" in output
+    assert "No matching score sets found." in output
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [CatalogError("invalid catalog"), OSError("filesystem failed")],
+)
+def test_expected_discovery_failures_return_one_without_stdout(
+    cause: Exception,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FailingCatalog:
+        @classmethod
+        def from_file(cls, path: Path) -> None:
+            raise cause
+
+    monkeypatch.setattr(cli_module, "MaveDBBulkCatalog", FailingCatalog)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    assert cli_module.main(
+        [
+            "discover",
+            "--main-json",
+            str(tmp_path / "main.json"),
+            "--query",
+            "BRCA1",
+        ]
+    ) == 1
+    assert capsys.readouterr().out == ""
+
+
+def test_unexpected_discovery_exception_propagates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cause = RuntimeError("unexpected")
+
+    class FailingCatalog:
+        @classmethod
+        def from_file(cls, path: Path) -> None:
+            raise cause
+
+    monkeypatch.setattr(cli_module, "MaveDBBulkCatalog", FailingCatalog)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli_module.main(
+            [
+                "discover",
+                "--main-json",
+                str(tmp_path / "main.json"),
+                "--query",
+                "BRCA1",
+            ]
+        )
+
+    assert exc_info.value is cause
+
+
+def test_discover_help_does_not_resolve_a_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_mavedb_snapshot",
+        _forbidden_discovery_side_effect,
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(["discover", "--help"])
+
+    assert exc_info.value.code == 0
 
 
 @pytest.mark.parametrize(

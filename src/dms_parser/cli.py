@@ -29,6 +29,12 @@ from dms_parser.exceptions import (
     SourceConfigurationError,
 )
 from dms_parser.pipeline import run_pipeline
+from dms_parser.sources.mavedb_bulk_catalog import (
+    MaveDBBulkCatalog,
+    MaveDBDiscoveredExperiment,
+    MaveDBDiscoveredScoreSet,
+    MaveDBDiscoveryResult,
+)
 from dms_parser.sources.mavedb_snapshots import (
     MaveDBSnapshot,
     fetch_mavedb_snapshot,
@@ -84,6 +90,20 @@ def _positive_record_id(value: str) -> str:
     """Parse a positive Zenodo record ID without changing its representation."""
     if re.fullmatch(r"[1-9][0-9]*", value) is None:
         raise argparse.ArgumentTypeError("must be a positive Zenodo record ID")
+    return value
+
+
+def _snapshot_selector(value: str) -> str:
+    """Parse ``latest`` or one positive concrete Zenodo record ID."""
+    if value == "latest":
+        return value
+    return _positive_record_id(value)
+
+
+def _non_empty_query(value: str) -> str:
+    """Reject an empty search query while preserving its supplied casing."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError("must be a non-empty query")
     return value
 
 
@@ -291,6 +311,49 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Set the process logging level (default: INFO).",
     )
     snapshot_fetch_parser.set_defaults(handler=_snapshot_fetch_command)
+
+    discover_parser = subparsers.add_parser(
+        "discover",
+        help="Search score sets in a local MaveDB bulk catalog.",
+    )
+    discovery_source = discover_parser.add_mutually_exclusive_group(
+        required=True
+    )
+    discovery_source.add_argument(
+        "--main-json",
+        type=_non_empty_path,
+        help="Use a local extracted MaveDB main.json.",
+    )
+    discovery_source.add_argument(
+        "--snapshot",
+        type=_snapshot_selector,
+        help="Use 'latest' or one concrete managed snapshot record ID.",
+    )
+    discover_parser.add_argument(
+        "--query",
+        "-q",
+        required=True,
+        type=_non_empty_query,
+    )
+    discover_parser.add_argument("--include-superseded", action="store_true")
+    discover_parser.add_argument("--cache-dir", type=_non_empty_path)
+    discover_parser.add_argument("--refresh", action="store_true")
+    discover_parser.add_argument(
+        "--format",
+        choices=_OUTPUT_FORMATS,
+        default="text",
+    )
+    discover_parser.add_argument("--output", "-o", type=_non_empty_path)
+    discover_parser.add_argument(
+        "--log-level",
+        choices=_LOG_LEVELS,
+        default="INFO",
+        help="Set the process logging level (default: INFO).",
+    )
+    discover_parser.set_defaults(
+        handler=_discover_command,
+        command_parser=discover_parser,
+    )
     return parser
 
 
@@ -498,6 +561,57 @@ def _snapshot_fetch_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _discover_command(args: argparse.Namespace) -> int:
+    """Search one local or managed MaveDB bulk catalog."""
+    if args.main_json is not None:
+        unsupported = [
+            option
+            for option, supplied in (
+                ("--cache-dir", args.cache_dir is not None),
+                ("--refresh", args.refresh),
+            )
+            if supplied
+        ]
+        if unsupported:
+            args.command_parser.error(
+                "--main-json does not support " + ", ".join(unsupported)
+            )
+
+    try:
+        if args.main_json is not None:
+            catalog_path = args.main_json.expanduser()
+            source = {"kind": "local"}
+        else:
+            cache_root = (
+                args.cache_dir.expanduser()
+                if args.cache_dir is not None
+                else _default_cache_root()
+            )
+            snapshot = fetch_mavedb_snapshot(
+                args.snapshot,
+                cache=FilesystemCache(cache_root),
+                refresh=args.refresh,
+            )
+            catalog_path = snapshot.main_json_path
+            source = _discovery_snapshot_source(snapshot)
+
+        catalog = MaveDBBulkCatalog.from_file(catalog_path)
+        result = catalog.search_by_gene(
+            args.query,
+            include_superseded=args.include_superseded,
+        )
+        rendered = (
+            _render_discovery_text(result, source)
+            if args.format == "text"
+            else _render_json(_discovery_values(result, source))
+        )
+        _publish_output(rendered, args.output)
+    except (DMSParserError, requests.RequestException, OSError) as exc:
+        logger.error("MaveDB bulk discovery failed: %s", exc)
+        return 1
+    return 0
+
+
 def _catalog_cache(args: argparse.Namespace) -> FilesystemCache | None:
     """Validate source-specific options and lazily create a ProteinGym cache."""
     if args.source == "mavedb":
@@ -547,6 +661,67 @@ def _snapshot_values(snapshot: MaveDBSnapshot) -> dict[str, Any]:
         "archive_path": str(snapshot.archive_path),
         "main_json_path": str(snapshot.main_json_path),
         "cache_hit": snapshot.cache_hit,
+    }
+
+
+def _discovery_snapshot_source(snapshot: MaveDBSnapshot) -> dict[str, Any]:
+    """Return deterministic provenance for one managed discovery source."""
+    return {
+        "kind": "snapshot",
+        "record_id": snapshot.record.record_id,
+        "doi": snapshot.record.doi,
+        "concept_doi": snapshot.record.concept_doi,
+        "publication_date": snapshot.record.publication_date,
+        "filename": snapshot.record.filename,
+        "size": snapshot.record.size,
+        "checksum": snapshot.record.checksum,
+    }
+
+
+def _discovered_score_set_values(
+    score_set: MaveDBDiscoveredScoreSet,
+) -> dict[str, Any]:
+    """Serialize one discovered score set with JSON lists."""
+    return {
+        "dataset_id": score_set.dataset_id,
+        "title": score_set.title,
+        "n_variants": score_set.n_variants,
+        "targets": list(score_set.targets),
+        "is_superseded": score_set.is_superseded,
+    }
+
+
+def _discovered_experiment_values(
+    experiment: MaveDBDiscoveredExperiment,
+) -> dict[str, Any]:
+    """Serialize one discovered experiment group."""
+    return {
+        "experiment_set_id": experiment.experiment_set_id,
+        "experiment_id": experiment.experiment_id,
+        "title": experiment.title,
+        "score_sets": [
+            _discovered_score_set_values(score_set)
+            for score_set in experiment.score_sets
+        ],
+    }
+
+
+def _discovery_values(
+    result: MaveDBDiscoveryResult,
+    source: dict[str, Any],
+) -> dict[str, Any]:
+    """Return deterministic machine-readable discovery output."""
+    return {
+        "query": result.query,
+        "snapshot_title": result.snapshot_title,
+        "as_of": result.as_of,
+        "experiment_count": result.experiment_count,
+        "score_set_count": result.score_set_count,
+        "source": source,
+        "experiments": [
+            _discovered_experiment_values(experiment)
+            for experiment in result.experiments
+        ],
     }
 
 
@@ -613,6 +788,61 @@ def _render_snapshot_text(snapshot: MaveDBSnapshot) -> str:
         f"{field}: {_display_value(value)}"
         for field, value in values.items()
     ) + "\n"
+
+
+def _render_discovery_text(
+    result: MaveDBDiscoveryResult,
+    source: dict[str, Any],
+) -> str:
+    """Render discovery results grouped by experiment."""
+    source_label = "local" if source["kind"] == "local" else "managed snapshot"
+    lines = [
+        f"query: {_display_value(result.query)}",
+        f"snapshot_title: {_display_value(result.snapshot_title)}",
+        f"as_of: {_display_value(result.as_of)}",
+        f"source: {source_label}",
+    ]
+    if source["kind"] == "snapshot":
+        lines.append(f"record_id: {_display_value(source['record_id'])}")
+    lines.extend(
+        [
+            f"experiment_count: {result.experiment_count}",
+            f"score_set_count: {result.score_set_count}",
+        ]
+    )
+    if not result.experiments:
+        lines.append("No matching score sets found.")
+        return "\n".join(lines) + "\n"
+
+    for experiment in result.experiments:
+        lines.extend(
+            [
+                f"experiment: {_display_value(experiment.experiment_id)}",
+                "  experiment_set: "
+                f"{_display_value(experiment.experiment_set_id)}",
+                f"  title: {_display_value(experiment.title)}",
+            ]
+        )
+        for score_set in experiment.score_sets:
+            lines.extend(
+                [
+                    f"  score_set: {_display_value(score_set.dataset_id)}",
+                    f"    title: {_display_value(score_set.title)}",
+                    "    targets: "
+                    + (
+                        ", ".join(
+                            _display_value(target)
+                            for target in score_set.targets
+                        )
+                        if score_set.targets
+                        else "-"
+                    ),
+                    f"    n_variants: {_display_value(score_set.n_variants)}",
+                    "    status: "
+                    + ("superseded" if score_set.is_superseded else "current"),
+                ]
+            )
+    return "\n".join(lines) + "\n"
 
 
 def _publish_output(rendered: str, output_path: Path | None) -> None:

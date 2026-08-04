@@ -9,6 +9,12 @@ from dms_parser.sources.mavedb import (
     load_mavedb_from_url,
 )
 from dms_parser.sources.mavedb_catalog import MaveDBCatalog
+from dms_parser.sources.mavedb_bulk_catalog import (
+    MaveDBBulkCatalog,
+    MaveDBDiscoveredExperiment,
+    MaveDBDiscoveredScoreSet,
+    MaveDBDiscoveryResult,
+)
 from dms_parser.sources.mavedb_snapshots import (
     MaveDBSnapshot,
     MaveDBSnapshotRecord,
@@ -35,6 +41,10 @@ __all__ = [
     "MaveDBSnapshotRecord",
     "fetch_mavedb_snapshot",
     "resolve_mavedb_snapshot",
+    "MaveDBBulkCatalog",
+    "MaveDBDiscoveredExperiment",
+    "MaveDBDiscoveredScoreSet",
+    "MaveDBDiscoveryResult",
     "download_mavedb_dataset",
     "load_mavedb_dataset",
     "load_mavedb_from_url",

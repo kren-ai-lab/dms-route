@@ -75,6 +75,12 @@ from dms_parser.transforms import (
 )
 from dms_parser.pipeline import PipelineResult, run_pipeline
 from dms_parser.sources.mavedb_catalog import MaveDBCatalog
+from dms_parser.sources.mavedb_bulk_catalog import (
+    MaveDBBulkCatalog,
+    MaveDBDiscoveredExperiment,
+    MaveDBDiscoveredScoreSet,
+    MaveDBDiscoveryResult,
+)
 from dms_parser.sources.mavedb_snapshots import (
     MaveDBSnapshot,
     MaveDBSnapshotRecord,
@@ -116,6 +122,10 @@ __all__ = [
     "MaveDBSnapshotRecord",
     "fetch_mavedb_snapshot",
     "resolve_mavedb_snapshot",
+    "MaveDBBulkCatalog",
+    "MaveDBDiscoveredExperiment",
+    "MaveDBDiscoveredScoreSet",
+    "MaveDBDiscoveryResult",
     "ProteinGymCatalog",
     "ProteinGymResource",
     "PROTEINGYM_RESOURCES",
