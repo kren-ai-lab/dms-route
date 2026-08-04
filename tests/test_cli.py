@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 import requests
+from typer.testing import CliRunner
 
 import dms_parser.cli as cli_module
 from dms_parser import (
@@ -30,6 +31,7 @@ from dms_parser.exceptions import (
     CatalogError,
     DatasetNotFoundError,
     InvalidCacheEntryError,
+    MaveDBSnapshotError,
     MaveDBSnapshotTableError,
     SourceConfigurationError,
 )
@@ -42,6 +44,7 @@ SNAPSHOT_EXTRACT_LATEST = (
     "--dataset-id",
     SNAPSHOT_TABLE_ID,
 )
+RUNNER = CliRunner()
 
 
 def _catalog_record(**overrides: Any) -> DatasetRecord:
@@ -117,14 +120,15 @@ HELP_CASES = (
 )
 
 
-def test_help_exits_successfully(capsys: pytest.CaptureFixture[str]) -> None:
+def test_help_exits_successfully() -> None:
     for arguments, expected_text in HELP_CASES:
-        with pytest.raises(SystemExit) as exc_info:
-            cli_module.main(arguments)
+        result = RUNNER.invoke(cli_module.app, arguments)
 
-        assert exc_info.value.code == 0, arguments
-        output = capsys.readouterr().out
+        assert result.exit_code == 0, arguments
+        assert result.stderr == "", arguments
+        output = result.stdout
         assert all(text in output for text in expected_text), arguments
+        assert "--no-" not in output, arguments
 
 
 @pytest.mark.parametrize(
@@ -161,13 +165,234 @@ def test_help_exits_successfully(capsys: pytest.CaptureFixture[str]) -> None:
         ],
     ],
 )
-def test_invalid_usage_preserves_argparse_exit_status(
+def test_invalid_usage_preserves_exit_status(
     arguments: list[str],
 ) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        cli_module.main(arguments)
+    result = RUNNER.invoke(cli_module.app, arguments)
 
-    assert exc_info.value.code == 2
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        [],
+        ["run"],
+        ["list"],
+        ["metadata"],
+        ["download"],
+        ["download-many"],
+        ["snapshot"],
+        ["snapshot", "fetch"],
+        ["snapshot", "extract"],
+        ["discover"],
+    ],
+)
+def test_short_help_alias_is_available_for_every_help_page(
+    command: list[str],
+) -> None:
+    result = RUNNER.invoke(cli_module.app, [*command, "-h"])
+
+    assert result.exit_code == 0
+    assert "Usage:" in result.stdout
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_code"),
+    [
+        (["list", "--source", "mavedb", "--format", "json"], 0),
+        (["--help"], 0),
+        (["run", "--only", "invalid"], 2),
+    ],
+)
+def test_main_argv_compatibility_wrapper(
+    arguments: list[str],
+    expected_code: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_module, "list_datasets", lambda *args, **kwargs: [])
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    if expected_code == 0 and arguments != ["--help"]:
+        assert cli_module.main(arguments) == 0
+    else:
+        with pytest.raises(SystemExit) as exc_info:
+            cli_module.main(arguments)
+        assert exc_info.value.code == expected_code
+
+
+def test_public_typer_app_disables_completion_options() -> None:
+    assert cli_module.app.info.name == "dms-parser"
+    assert cli_module.snapshot_app.info.name == "snapshot"
+
+    result = RUNNER.invoke(cli_module.app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "--install-completion" not in result.stdout
+    assert "--show-completion" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["list", "--source", "unknown"],
+        ["list", "--source", "mavedb", "--format", "yaml"],
+        [
+            "list",
+            "--source",
+            "proteingym",
+            "--variant-type",
+            "deletions",
+        ],
+        ["run", "--config", "config.yml", "--log-level", "TRACE"],
+        [
+            "download",
+            "--source",
+            "mavedb",
+            "--dataset-id",
+            "urn:mavedb:00000001-a-1",
+            "--output-dir",
+            "output",
+            "--acquisition",
+            "bulk",
+        ],
+    ],
+)
+def test_invalid_enum_values_are_usage_errors(arguments: list[str]) -> None:
+    result = RUNNER.invoke(cli_module.app, arguments)
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert result.stderr
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["list"],
+        ["metadata", "--source", "mavedb"],
+        [
+            "download",
+            "--source",
+            "mavedb",
+            "--dataset-id",
+            "urn:mavedb:00000001-a-1",
+        ],
+        ["snapshot", "extract", "--latest"],
+        ["discover", "--main-json", "main.json"],
+    ],
+)
+def test_missing_required_options_are_usage_errors(arguments: list[str]) -> None:
+    result = RUNNER.invoke(cli_module.app, arguments)
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert result.stderr
+
+
+def test_run_short_config_alias_forwards_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yml"
+    calls: dict[str, Any] = {}
+    monkeypatch.setattr(
+        cli_module,
+        "load_pipeline_config",
+        lambda path: calls.setdefault("path", path) or {"output": {}},
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "run_pipeline",
+        lambda config, **kwargs: PipelineResult(summary=[]),
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    result = RUNNER.invoke(cli_module.app, ["run", "-c", str(config_path)])
+
+    assert result.exit_code == 0
+    assert calls["path"] == config_path
+
+
+@pytest.mark.parametrize("option", ["--output-dir", "--cache-dir"])
+def test_download_rejects_empty_path_values_before_side_effects(
+    option: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arguments = [
+        "download",
+        "--source",
+        "proteingym",
+        "--dataset-id",
+        "ASSAY_1",
+        "--output-dir",
+        "output",
+    ]
+    if option == "--output-dir":
+        arguments[-1] = ""
+    else:
+        arguments.extend([option, ""])
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("empty path reached the download API")
+        ),
+    )
+
+    result = RUNNER.invoke(cli_module.app, arguments)
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "non-empty path" in result.stderr
+
+
+def test_cli_runner_preserves_stdout_and_stderr_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_logger = logging.getLogger()
+    monkeypatch.setattr(root_logger, "handlers", [])
+    monkeypatch.setattr(
+        cli_module,
+        "load_pipeline_config",
+        lambda path: (_ for _ in ()).throw(
+            SourceConfigurationError("invalid configuration")
+        ),
+    )
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        ["run", "--config", "invalid.yml"],
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Configuration error: invalid configuration" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_cli_runner_propagates_unexpected_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cause = RuntimeError("unexpected")
+    monkeypatch.setattr(
+        cli_module,
+        "list_datasets",
+        lambda *args, **kwargs: (_ for _ in ()).throw(cause),
+    )
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        RUNNER.invoke(
+            cli_module.app,
+            ["list", "--source", "mavedb"],
+            catch_exceptions=False,
+        )
+
+    assert exc_info.value is cause
 
 
 def test_run_forwards_explicit_arguments(
@@ -1707,7 +1932,8 @@ def test_download_help_excludes_deferred_options(
     output = capsys.readouterr().out
     assert "--variant-type" not in output
     assert "--keep-failed" not in output
-    assert "--acquisition {api,snapshot}" in output
+    assert "--acquisition" in output
+    assert "api" in output and "snapshot" in output
     assert "--snapshot-record" in output
     assert "--include-superseded" in output
     assert "MaveDB-only" in output
@@ -1949,6 +2175,64 @@ def test_download_forwards_explicit_options_and_expands_paths(
     assert "stream" not in logging_calls[0]
 
 
+def test_download_snapshot_missing_cache_does_not_fetch_implicitly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    root_logger = logging.getLogger()
+    monkeypatch.setattr(root_logger, "handlers", [])
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_mavedb_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("download invoked implicit snapshot fetching")
+        ),
+    )
+
+    def missing_snapshot(
+        source: str,
+        dataset_id: str,
+        **kwargs: Any,
+    ) -> None:
+        assert source == "mavedb"
+        assert kwargs["acquisition"] == "snapshot"
+        assert kwargs["snapshot_record_id"] == "20840937"
+        raise MaveDBSnapshotError(
+            "MaveDB snapshot 20840937 is not cached; run "
+            "'dms-parser snapshot fetch --record 20840937' first."
+        )
+
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        missing_snapshot,
+    )
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "download",
+            "--source",
+            "mavedb",
+            "--dataset-id",
+            "urn:mavedb:00000001-a-1",
+            "--output-dir",
+            str(output_dir),
+            "--acquisition",
+            "snapshot",
+            "--snapshot-record",
+            "20840937",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "snapshot fetch --record 20840937" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not output_dir.exists()
+
+
 def test_expected_download_failure_returns_one_without_stdout(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -2044,7 +2328,8 @@ def test_download_many_help_excludes_deferred_options(
         "--query",
     ):
         assert option not in output
-    assert "--acquisition {api,snapshot}" in output
+    assert "--acquisition" in output
+    assert "api" in output and "snapshot" in output
     assert "--snapshot-record" in output
     assert "--include-superseded" in output
     assert "1.9 GB" in output
@@ -2326,5 +2611,6 @@ def test_pyproject_declares_cli_runtime_dependencies() -> None:
         section_array("project.optional-dependencies", "dev")
     )
 
-    assert {"pyyaml", "pyarrow"} <= runtime_names
-    assert {"pyyaml", "pyarrow"}.isdisjoint(dev_names)
+    assert {"pyyaml", "pyarrow", "typer"} <= runtime_names
+    assert {"pyyaml", "pyarrow", "typer"}.isdisjoint(dev_names)
+    assert "typer>=0.27.1,<0.28" in section_array("project", "dependencies")

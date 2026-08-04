@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import os
@@ -10,10 +9,12 @@ import re
 import sys
 import tempfile
 from dataclasses import asdict
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import requests
+import typer
 
 from dms_parser.cache import FilesystemCache
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
@@ -50,10 +51,6 @@ from dms_parser.sources.mavedb_snapshot_tables import (
 
 logger = logging.getLogger(__name__)
 
-_CATALOG_SOURCES = ("mavedb", "proteingym")
-_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
-_OUTPUT_FORMATS = ("text", "json")
-_VARIANT_TYPES = ("substitutions", "indels")
 _LIST_COLUMNS = (
     ("SOURCE", "source"),
     ("DATASET_ID", "dataset_id"),
@@ -71,33 +68,81 @@ _METADATA_FIELDS = (
     "n_variants",
 )
 
+_HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
+_COMPATIBILITY_OUTCOME: str | None = None
+
+
+class _CatalogSource(str, Enum):
+    """Supported source names exposed by catalog and download commands."""
+
+    mavedb = "mavedb"
+    proteingym = "proteingym"
+
+
+class _LogLevel(str, Enum):
+    """Supported process logging levels."""
+
+    debug = "DEBUG"
+    info = "INFO"
+    warning = "WARNING"
+    error = "ERROR"
+
+
+class _OutputFormat(str, Enum):
+    """Supported human- and machine-readable output formats."""
+
+    text = "text"
+    json = "json"
+
+
+class _VariantType(str, Enum):
+    """ProteinGym catalog variant-type filters."""
+
+    substitutions = "substitutions"
+    indels = "indels"
+
+
+class _PipelineSource(str, Enum):
+    """Source selection accepted by the configuration pipeline."""
+
+    all = "all"
+    proteingym = "proteingym"
+    mavedb = "mavedb"
+
+
+class _Acquisition(str, Enum):
+    """MaveDB standardized-download acquisition backends."""
+
+    api = "api"
+    snapshot = "snapshot"
+
 
 def _positive_integer(value: str) -> int:
-    """Parse a positive integer for argparse."""
+    """Parse a positive integer for a Typer option."""
     try:
         parsed = int(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+        raise typer.BadParameter("must be a positive integer") from exc
     if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be a positive integer")
+        raise typer.BadParameter("must be a positive integer")
     return parsed
 
 
 def _non_negative_integer(value: str) -> int:
-    """Parse a non-negative integer for argparse."""
+    """Parse a non-negative integer for a Typer option."""
     try:
         parsed = int(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("must be a non-negative integer") from exc
+        raise typer.BadParameter("must be a non-negative integer") from exc
     if parsed < 0:
-        raise argparse.ArgumentTypeError("must be a non-negative integer")
+        raise typer.BadParameter("must be a non-negative integer")
     return parsed
 
 
 def _positive_record_id(value: str) -> str:
     """Parse a positive Zenodo record ID without changing its representation."""
     if re.fullmatch(r"[1-9][0-9]*", value) is None:
-        raise argparse.ArgumentTypeError("must be a positive Zenodo record ID")
+        raise typer.BadParameter("must be a positive Zenodo record ID")
     return value
 
 
@@ -111,21 +156,21 @@ def _snapshot_selector(value: str) -> str:
 def _non_empty_query(value: str) -> str:
     """Reject an empty search query while preserving its supplied casing."""
     if not value.strip():
-        raise argparse.ArgumentTypeError("must be a non-empty query")
+        raise typer.BadParameter("must be a non-empty query")
     return value
 
 
 def _non_empty_dataset_id(value: str) -> str:
     """Reject empty dataset identifiers while preserving the supplied value."""
     if not value.strip():
-        raise argparse.ArgumentTypeError("must be a non-empty dataset identifier")
+        raise typer.BadParameter("must be a non-empty dataset identifier")
     return value
 
 
 def _non_empty_path(value: str) -> Path:
     """Reject empty paths while preserving normal pathlib parsing."""
     if not value.strip():
-        raise argparse.ArgumentTypeError("must be a non-empty path")
+        raise typer.BadParameter("must be a non-empty path")
     return Path(value)
 
 
@@ -133,14 +178,14 @@ def _batch_dataset_id(value: str) -> str:
     """Reject whitespace and control characters in a batch dataset ID."""
     _non_empty_dataset_id(value)
     if value != value.strip():
-        raise argparse.ArgumentTypeError(
+        raise typer.BadParameter(
             "must not have leading or trailing whitespace"
         )
     if any(
         ord(character) < 32 or 127 <= ord(character) <= 159
         for character in value
     ):
-        raise argparse.ArgumentTypeError("must not contain control characters")
+        raise typer.BadParameter("must not contain control characters")
     return value
 
 
@@ -150,374 +195,355 @@ def _snapshot_table_dataset_id(value: str) -> str:
     try:
         validate_source_dataset_id("mavedb", value)
     except SourceConfigurationError as exc:
-        raise argparse.ArgumentTypeError(str(exc)) from exc
+        raise typer.BadParameter(str(exc)) from exc
     return value
 
 
-def _add_snapshot_selector(parser: argparse.ArgumentParser) -> None:
-    """Add the shared required snapshot selector arguments."""
-    selector = parser.add_mutually_exclusive_group(required=True)
-    selector.add_argument(
-        "--latest",
-        action="store_true",
-        help="Resolve the latest concrete MaveDB snapshot.",
-    )
-    selector.add_argument(
-        "--record",
-        type=_positive_record_id,
-        help="Use one fixed concrete Zenodo record ID.",
-    )
+app = typer.Typer(
+    name="dms-parser",
+    help="Process DMS datasets using dms_parser.",
+    add_completion=False,
+    no_args_is_help=False,
+    context_settings=_HELP_CONTEXT,
+    pretty_exceptions_enable=False,
+)
+snapshot_app = typer.Typer(
+    name="snapshot",
+    help="Manage official MaveDB bulk snapshots.",
+    add_completion=False,
+    no_args_is_help=False,
+    context_settings=_HELP_CONTEXT,
+    pretty_exceptions_enable=False,
+)
 
 
-def _add_snapshot_options(parser: argparse.ArgumentParser) -> None:
-    """Add cache and format options shared by snapshot commands."""
-    parser.add_argument("--cache-dir", type=_non_empty_path)
-    parser.add_argument("--refresh", action="store_true")
-    parser.add_argument(
-        "--format",
-        choices=_OUTPUT_FORMATS,
-        default="text",
-    )
-
-
-def _add_log_level_option(parser: argparse.ArgumentParser) -> None:
-    """Add the shared logging-level option."""
-    parser.add_argument(
-        "--log-level",
-        choices=_LOG_LEVELS,
-        default="INFO",
-        help="Set the process logging level (default: INFO).",
-    )
-
-
-def _add_download_options(
-    parser: argparse.ArgumentParser,
-    *,
-    multiple: bool,
-) -> None:
-    """Add the shared single- and multi-download arguments."""
-    parser.add_argument("--source", choices=_CATALOG_SOURCES, required=True)
-    parser.add_argument(
-        "--dataset-id",
-        required=True,
-        type=_batch_dataset_id if multiple else _non_empty_dataset_id,
-        **({"action": "append"} if multiple else {}),
-    )
-    parser.add_argument("--output-dir", required=True, type=_non_empty_path)
-    parser.add_argument("--cache-dir", type=_non_empty_path)
-    parser.add_argument("--refresh", action="store_true")
-    parser.add_argument(
-        "--acquisition",
-        choices=("api", "snapshot"),
-        help=(
-            "MaveDB-only acquisition backend. Snapshot mode requires a "
-            "prefetched concrete record and never downloads the approximately "
-            "1.9 GB archive implicitly."
-        ),
-    )
-    parser.add_argument(
-        "--snapshot-record",
-        type=_positive_record_id,
-        help="Concrete prefetched Zenodo record ID for snapshot acquisition.",
-    )
-    parser.add_argument(
-        "--include-superseded",
-        action="store_true",
-        help="Allow superseded score sets in MaveDB snapshot mode.",
-    )
-    parser.add_argument("--drop-failed", action="store_true")
-    parser.add_argument("--add-wildtype-row", action="store_true")
-    parser.add_argument("--overwrite", action="store_true")
-    _add_log_level_option(parser)
-
-
-def _build_parser() -> argparse.ArgumentParser:
-    """Build the parser for the installed ``dms-parser`` command."""
-    parser = argparse.ArgumentParser(
-        prog="dms-parser",
-        description="Process DMS datasets using dms_parser.",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    run_parser = subparsers.add_parser(
-        "run",
-        help="Run a configuration-driven DMS pipeline.",
-    )
-    run_parser.add_argument(
-        "--config",
-        "-c",
-        required=True,
-        type=Path,
-        help="Path to the pipeline configuration YAML file.",
-    )
-    run_parser.add_argument(
-        "--only",
-        choices=["all", "proteingym", "mavedb"],
-        default="all",
-        help="Restrict execution to one source (default: all).",
-    )
-    run_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help=(
-            "Resolve metadata and WT sequences without downloading scores "
-            "or writing processed output."
-        ),
-    )
-    _add_log_level_option(run_parser)
-    run_parser.set_defaults(handler=_run_command)
-
-    list_parser = subparsers.add_parser(
-        "list",
-        help="List datasets from a source catalog.",
-    )
-    list_parser.add_argument("--source", choices=_CATALOG_SOURCES, required=True)
-    list_parser.add_argument("--query", "-q")
-    list_parser.add_argument("--limit", type=_positive_integer)
-    list_parser.add_argument("--offset", type=_non_negative_integer, default=0)
-    _add_catalog_options(list_parser)
-    list_parser.set_defaults(handler=_list_command, command_parser=list_parser)
-
-    metadata_parser = subparsers.add_parser(
-        "metadata",
-        help="Retrieve metadata for one dataset.",
-    )
-    metadata_parser.add_argument("--source", choices=_CATALOG_SOURCES, required=True)
-    metadata_parser.add_argument(
-        "--dataset-id",
-        required=True,
-        type=_non_empty_dataset_id,
-    )
-    _add_catalog_options(metadata_parser)
-    metadata_parser.set_defaults(handler=_metadata_command, command_parser=metadata_parser)
-
-    download_parser = subparsers.add_parser(
-        "download",
-        help="Download and standardize one substitutions dataset.",
-    )
-    _add_download_options(download_parser, multiple=False)
-    download_parser.set_defaults(
-        handler=_download_command,
-        command_parser=download_parser,
-    )
-
-    download_many_parser = subparsers.add_parser(
-        "download-many",
-        help="Download and standardize several substitutions datasets.",
-    )
-    _add_download_options(download_many_parser, multiple=True)
-    download_many_parser.set_defaults(
-        handler=_download_many_command,
-        command_parser=download_many_parser,
-    )
-
-    snapshot_parser = subparsers.add_parser(
-        "snapshot",
-        help="Manage official MaveDB bulk snapshots.",
-    )
-    snapshot_subparsers = snapshot_parser.add_subparsers(
-        dest="snapshot_command",
-        required=True,
-    )
-    snapshot_fetch_parser = snapshot_subparsers.add_parser(
-        "fetch",
-        help="Resolve, verify, and cache a MaveDB bulk snapshot.",
-    )
-    _add_snapshot_selector(snapshot_fetch_parser)
-    _add_snapshot_options(snapshot_fetch_parser)
-    _add_log_level_option(snapshot_fetch_parser)
-    snapshot_fetch_parser.set_defaults(handler=_snapshot_fetch_command)
-
-    snapshot_extract_parser = snapshot_subparsers.add_parser(
-        "extract",
-        help="Extract selected raw score/count CSVs from a managed snapshot.",
-        description=(
-            "Extract selected raw score/count CSVs from a managed MaveDB "
-            "snapshot. An uncached snapshot may download approximately 1.9 GB."
-        ),
-    )
-    _add_snapshot_selector(snapshot_extract_parser)
-    snapshot_extract_parser.add_argument(
-        "--dataset-id",
-        action="append",
-        required=True,
-        type=_snapshot_table_dataset_id,
-        help="Canonical MaveDB score-set URN; repeat for multiple tables.",
-    )
-    snapshot_extract_parser.add_argument(
-        "--include-superseded",
-        action="store_true",
-    )
-    _add_snapshot_options(snapshot_extract_parser)
-    snapshot_extract_parser.add_argument(
-        "--output",
-        "-o",
-        type=_non_empty_path,
-    )
-    _add_log_level_option(snapshot_extract_parser)
-    snapshot_extract_parser.set_defaults(
-        handler=_snapshot_extract_command,
-        command_parser=snapshot_extract_parser,
-    )
-
-    discover_parser = subparsers.add_parser(
-        "discover",
-        help="Search score sets in a local MaveDB bulk catalog.",
-    )
-    discovery_source = discover_parser.add_mutually_exclusive_group(
-        required=True
-    )
-    discovery_source.add_argument(
-        "--main-json",
-        type=_non_empty_path,
-        help="Use a local extracted MaveDB main.json.",
-    )
-    discovery_source.add_argument(
-        "--snapshot",
-        type=_snapshot_selector,
-        help="Use 'latest' or one concrete managed snapshot record ID.",
-    )
-    discover_parser.add_argument(
-        "--query",
-        "-q",
-        required=True,
-        type=_non_empty_query,
-    )
-    discover_parser.add_argument("--include-superseded", action="store_true")
-    discover_parser.add_argument("--cache-dir", type=_non_empty_path)
-    discover_parser.add_argument("--refresh", action="store_true")
-    discover_parser.add_argument(
-        "--format",
-        choices=_OUTPUT_FORMATS,
-        default="text",
-    )
-    discover_parser.add_argument("--output", "-o", type=_non_empty_path)
-    _add_log_level_option(discover_parser)
-    discover_parser.set_defaults(
-        handler=_discover_command,
-        command_parser=discover_parser,
-    )
-    return parser
-
-
-def _add_catalog_options(parser: argparse.ArgumentParser) -> None:
-    """Add options shared by the catalog commands."""
-    parser.add_argument("--variant-type", choices=_VARIANT_TYPES)
-    parser.add_argument("--cache-dir", type=Path)
-    parser.add_argument("--refresh", action="store_true")
-    parser.add_argument("--format", choices=_OUTPUT_FORMATS, default="text")
-    parser.add_argument("--output", "-o", type=Path)
-    _add_log_level_option(parser)
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Run the command-line interface and return a process exit code."""
-    args = _build_parser().parse_args(argv)
-
+def _start_command(log_level: _LogLevel) -> None:
+    """Mark command execution and configure the established logging format."""
+    global _COMPATIBILITY_OUTCOME
+    _COMPATIBILITY_OUTCOME = "command"
     logging.basicConfig(
-        level=getattr(logging, args.log_level),
+        level=getattr(logging, log_level.value),
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
         datefmt="%H:%M:%S",
     )
 
-    return args.handler(args)
+
+def _usage_error(message: str) -> None:
+    """Raise a Typer usage error while preserving ``main(argv)`` behavior."""
+    global _COMPATIBILITY_OUTCOME
+    _COMPATIBILITY_OUTCOME = "usage"
+    raise typer.BadParameter(message)
 
 
-def _run_command(args: argparse.Namespace) -> int:
+def _finish(exit_code: int) -> None:
+    """Exit from a command only when its established result is nonzero."""
+    if exit_code:
+        raise typer.Exit(exit_code)
+
+
+@app.command(
+    "run",
+    help="Run a configuration-driven DMS pipeline.",
+    context_settings=_HELP_CONTEXT,
+)
+def _run_command(
+    config_path: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            "-c",
+            metavar="CONFIG",
+            help="Path to the pipeline configuration YAML file.",
+        ),
+    ],
+    only: Annotated[
+        _PipelineSource,
+        typer.Option(
+            "--only",
+            help="Restrict execution to one source (default: all).",
+        ),
+    ] = _PipelineSource.all,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help=(
+                "Resolve metadata and WT sequences without downloading scores "
+                "or writing processed output."
+            ),
+        ),
+    ] = False,
+    log_level: Annotated[
+        _LogLevel,
+        typer.Option(
+            "--log-level",
+            help="Set the process logging level (default: INFO).",
+        ),
+    ] = _LogLevel.info,
+) -> None:
     """Execute the existing configuration-driven pipeline command."""
+    _start_command(log_level)
     try:
-        config = load_pipeline_config(args.config)
+        config = load_pipeline_config(config_path)
     except SourceConfigurationError as exc:
         logger.error("Configuration error: %s", exc)
-        return 1
+        raise typer.Exit(1) from None
 
-    result = run_pipeline(
-        config,
-        only=args.only,
-        dry_run=args.dry_run,
-    )
-    return result.exit_code
+    result = run_pipeline(config, only=only.value, dry_run=dry_run)
+    _finish(result.exit_code)
 
 
-def _list_command(args: argparse.Namespace) -> int:
+@app.command(
+    "list",
+    help="List datasets from a source catalog.",
+    context_settings=_HELP_CONTEXT,
+)
+def _list_command(
+    source: Annotated[_CatalogSource, typer.Option("--source")],
+    query: Annotated[
+        str | None,
+        typer.Option("--query", "-q", metavar="QUERY"),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", parser=_positive_integer, metavar="LIMIT"),
+    ] = None,
+    offset: Annotated[
+        int,
+        typer.Option("--offset", parser=_non_negative_integer, metavar="OFFSET"),
+    ] = 0,
+    variant_type: Annotated[
+        _VariantType | None,
+        typer.Option("--variant-type"),
+    ] = None,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", metavar="CACHE_DIR"),
+    ] = None,
+    refresh: Annotated[bool, typer.Option("--refresh")] = False,
+    output_format: Annotated[
+        _OutputFormat,
+        typer.Option("--format"),
+    ] = _OutputFormat.text,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", metavar="OUTPUT"),
+    ] = None,
+    log_level: Annotated[
+        _LogLevel,
+        typer.Option(
+            "--log-level",
+            help="Set the process logging level (default: INFO).",
+        ),
+    ] = _LogLevel.info,
+) -> None:
     """List catalog records and render them in the selected format."""
+    _start_command(log_level)
+    source_name = source.value
+    variant_name = variant_type.value if variant_type is not None else None
     try:
-        cache = _catalog_cache(args)
+        cache = _catalog_cache(
+            source_name,
+            variant_type=variant_name,
+            cache_dir=cache_dir,
+            refresh=refresh,
+        )
         records = list_datasets(
-            args.source,
-            query=args.query,
-            limit=args.limit,
-            offset=args.offset,
-            variant_type=args.variant_type,
+            source_name,
+            query=query,
+            limit=limit,
+            offset=offset,
+            variant_type=variant_name,
             cache=cache,
-            refresh=args.refresh,
+            refresh=refresh,
         )
         rendered = (
             _render_list_text(records)
-            if args.format == "text"
+            if output_format is _OutputFormat.text
             else _render_json([_record_values(record) for record in records])
         )
-        _publish_output(rendered, args.output)
+        _publish_output(rendered, output)
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("Catalog list failed: %s", exc)
-        return 1
-    return 0
+        raise typer.Exit(1) from None
 
 
-def _metadata_command(args: argparse.Namespace) -> int:
+@app.command(
+    "metadata",
+    help="Retrieve metadata for one dataset.",
+    context_settings=_HELP_CONTEXT,
+)
+def _metadata_command(
+    source: Annotated[_CatalogSource, typer.Option("--source")],
+    dataset_id: Annotated[
+        str,
+        typer.Option(
+            "--dataset-id",
+            parser=_non_empty_dataset_id,
+            metavar="DATASET_ID",
+        ),
+    ],
+    variant_type: Annotated[
+        _VariantType | None,
+        typer.Option("--variant-type"),
+    ] = None,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", metavar="CACHE_DIR"),
+    ] = None,
+    refresh: Annotated[bool, typer.Option("--refresh")] = False,
+    output_format: Annotated[
+        _OutputFormat,
+        typer.Option("--format"),
+    ] = _OutputFormat.text,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", metavar="OUTPUT"),
+    ] = None,
+    log_level: Annotated[
+        _LogLevel,
+        typer.Option(
+            "--log-level",
+            help="Set the process logging level (default: INFO).",
+        ),
+    ] = _LogLevel.info,
+) -> None:
     """Retrieve one catalog record and render it in the selected format."""
+    _start_command(log_level)
+    source_name = source.value
+    variant_name = variant_type.value if variant_type is not None else None
     try:
-        cache = _catalog_cache(args)
+        cache = _catalog_cache(
+            source_name,
+            variant_type=variant_name,
+            cache_dir=cache_dir,
+            refresh=refresh,
+        )
         record = get_dataset_metadata(
-            args.source,
-            args.dataset_id,
-            variant_type=args.variant_type,
+            source_name,
+            dataset_id,
+            variant_type=variant_name,
             cache=cache,
-            refresh=args.refresh,
+            refresh=refresh,
         )
         rendered = (
             _render_metadata_text(record)
-            if args.format == "text"
+            if output_format is _OutputFormat.text
             else _render_json(_record_values(record))
         )
-        _publish_output(rendered, args.output)
+        _publish_output(rendered, output)
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("Catalog metadata lookup failed: %s", exc)
-        return 1
-    return 0
+        raise typer.Exit(1) from None
 
 
-def _download_command(args: argparse.Namespace) -> int:
+def _download_options_help() -> str:
+    """Return the shared MaveDB acquisition help text."""
+    return (
+        "MaveDB-only acquisition backend. Snapshot mode requires a prefetched "
+        "concrete record and never downloads the approximately 1.9 GB archive "
+        "implicitly."
+    )
+
+
+@app.command(
+    "download",
+    help="Download and standardize one substitutions dataset.",
+    context_settings=_HELP_CONTEXT,
+)
+def _download_command(
+    source: Annotated[_CatalogSource, typer.Option("--source")],
+    dataset_id: Annotated[
+        str,
+        typer.Option(
+            "--dataset-id",
+            parser=_non_empty_dataset_id,
+            metavar="DATASET_ID",
+        ),
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            parser=_non_empty_path,
+            metavar="OUTPUT_DIR",
+        ),
+    ],
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            parser=_non_empty_path,
+            metavar="CACHE_DIR",
+        ),
+    ] = None,
+    refresh: Annotated[bool, typer.Option("--refresh")] = False,
+    acquisition: Annotated[
+        _Acquisition | None,
+        typer.Option("--acquisition", help=_download_options_help()),
+    ] = None,
+    snapshot_record: Annotated[
+        str | None,
+        typer.Option(
+            "--snapshot-record",
+            parser=_positive_record_id,
+            metavar="SNAPSHOT_RECORD",
+            help="Concrete prefetched Zenodo record ID for snapshot acquisition.",
+        ),
+    ] = None,
+    include_superseded: Annotated[
+        bool,
+        typer.Option(
+            "--include-superseded",
+            help="Allow superseded score sets in MaveDB snapshot mode.",
+        ),
+    ] = False,
+    drop_failed: Annotated[bool, typer.Option("--drop-failed")] = False,
+    add_wildtype_row: Annotated[
+        bool,
+        typer.Option("--add-wildtype-row"),
+    ] = False,
+    overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+    log_level: Annotated[
+        _LogLevel,
+        typer.Option(
+            "--log-level",
+            help="Set the process logging level (default: INFO).",
+        ),
+    ] = _LogLevel.info,
+) -> None:
     """Download and standardize one source dataset."""
+    _start_command(log_level)
+    source_name = source.value
+    acquisition_name = acquisition.value if acquisition is not None else None
     try:
-        validate_source_dataset_id(args.source, args.dataset_id)
+        validate_source_dataset_id(source_name, dataset_id)
         _validate_download_acquisition(
-            args.source,
-            acquisition=args.acquisition,
-            snapshot_record_id=args.snapshot_record,
-            include_superseded=args.include_superseded,
+            source_name,
+            acquisition=acquisition_name,
+            snapshot_record_id=snapshot_record,
+            include_superseded=include_superseded,
         )
     except (SourceConfigurationError, InvalidPipelineOptionError) as exc:
-        args.command_parser.error(str(exc))
+        _usage_error(str(exc))
 
-    cache_root = _cache_root_from_args(args)
     try:
         result = download_and_standardize_dataset(
-            args.source,
-            args.dataset_id,
-            output_dir=args.output_dir.expanduser(),
-            cache=FilesystemCache(cache_root),
-            refresh=args.refresh,
-            drop_failed=args.drop_failed,
-            add_wildtype_row=args.add_wildtype_row,
-            overwrite=args.overwrite,
-            acquisition=args.acquisition,
-            snapshot_record_id=args.snapshot_record,
-            include_superseded=args.include_superseded,
+            source_name,
+            dataset_id,
+            output_dir=output_dir.expanduser(),
+            cache=FilesystemCache(_cache_root(cache_dir)),
+            refresh=refresh,
+            drop_failed=drop_failed,
+            add_wildtype_row=add_wildtype_row,
+            overwrite=overwrite,
+            acquisition=acquisition_name,
+            snapshot_record_id=snapshot_record,
+            include_superseded=include_superseded,
         )
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("Dataset download failed: %s", exc)
-        return 1
+        raise typer.Exit(1) from None
 
     logger.info(
         "Dataset download completed dataset=%s summary_csv=%s summary_json=%s",
@@ -525,52 +551,118 @@ def _download_command(args: argparse.Namespace) -> int:
         result.summary_csv_path,
         result.summary_json_path,
     )
-    return 0
 
 
-def _download_many_command(args: argparse.Namespace) -> int:
+@app.command(
+    "download-many",
+    help="Download and standardize several substitutions datasets.",
+    context_settings=_HELP_CONTEXT,
+)
+def _download_many_command(
+    source: Annotated[_CatalogSource, typer.Option("--source")],
+    dataset_ids: Annotated[
+        list[str],
+        typer.Option(
+            "--dataset-id",
+            parser=_batch_dataset_id,
+            metavar="DATASET_ID",
+        ),
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            parser=_non_empty_path,
+            metavar="OUTPUT_DIR",
+        ),
+    ],
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            parser=_non_empty_path,
+            metavar="CACHE_DIR",
+        ),
+    ] = None,
+    refresh: Annotated[bool, typer.Option("--refresh")] = False,
+    acquisition: Annotated[
+        _Acquisition | None,
+        typer.Option("--acquisition", help=_download_options_help()),
+    ] = None,
+    snapshot_record: Annotated[
+        str | None,
+        typer.Option(
+            "--snapshot-record",
+            parser=_positive_record_id,
+            metavar="SNAPSHOT_RECORD",
+            help="Concrete prefetched Zenodo record ID for snapshot acquisition.",
+        ),
+    ] = None,
+    include_superseded: Annotated[
+        bool,
+        typer.Option(
+            "--include-superseded",
+            help="Allow superseded score sets in MaveDB snapshot mode.",
+        ),
+    ] = False,
+    drop_failed: Annotated[bool, typer.Option("--drop-failed")] = False,
+    add_wildtype_row: Annotated[
+        bool,
+        typer.Option("--add-wildtype-row"),
+    ] = False,
+    overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+    log_level: Annotated[
+        _LogLevel,
+        typer.Option(
+            "--log-level",
+            help="Set the process logging level (default: INFO).",
+        ),
+    ] = _LogLevel.info,
+) -> None:
     """Download and standardize an ordered batch from one source."""
-    output_dir = args.output_dir.expanduser()
+    _start_command(log_level)
+    source_name = source.value
+    acquisition_name = acquisition.value if acquisition is not None else None
+    resolved_output_dir = output_dir.expanduser()
     try:
         _validate_download_acquisition(
-            args.source,
-            acquisition=args.acquisition,
-            snapshot_record_id=args.snapshot_record,
-            include_superseded=args.include_superseded,
+            source_name,
+            acquisition=acquisition_name,
+            snapshot_record_id=snapshot_record,
+            include_superseded=include_superseded,
         )
         _validate_dataset_batch_request(
-            args.source,
-            args.dataset_id,
-            output_dir=output_dir,
-            refresh=args.refresh,
-            drop_failed=args.drop_failed,
-            add_wildtype_row=args.add_wildtype_row,
-            overwrite=args.overwrite,
+            source_name,
+            dataset_ids,
+            output_dir=resolved_output_dir,
+            refresh=refresh,
+            drop_failed=drop_failed,
+            add_wildtype_row=add_wildtype_row,
+            overwrite=overwrite,
         )
     except (SourceConfigurationError, InvalidPipelineOptionError) as exc:
-        args.command_parser.error(str(exc))
+        _usage_error(str(exc))
     except OSError as exc:
         logger.error("Dataset batch preflight failed: %s", exc)
-        return 1
+        raise typer.Exit(1) from None
 
-    cache_root = _cache_root_from_args(args)
     try:
         result = download_and_standardize_datasets(
-            args.source,
-            args.dataset_id,
-            output_dir=output_dir,
-            cache=FilesystemCache(cache_root),
-            refresh=args.refresh,
-            drop_failed=args.drop_failed,
-            add_wildtype_row=args.add_wildtype_row,
-            overwrite=args.overwrite,
-            acquisition=args.acquisition,
-            snapshot_record_id=args.snapshot_record,
-            include_superseded=args.include_superseded,
+            source_name,
+            dataset_ids,
+            output_dir=resolved_output_dir,
+            cache=FilesystemCache(_cache_root(cache_dir)),
+            refresh=refresh,
+            drop_failed=drop_failed,
+            add_wildtype_row=add_wildtype_row,
+            overwrite=overwrite,
+            acquisition=acquisition_name,
+            snapshot_record_id=snapshot_record,
+            include_superseded=include_superseded,
         )
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("Dataset batch download failed: %s", exc)
-        return 1
+        raise typer.Exit(1) from None
 
     logger.info(
         "Dataset batch completed successes=%d failures=%d summary_csv=%s "
@@ -580,132 +672,328 @@ def _download_many_command(args: argparse.Namespace) -> int:
         result.summary_csv_path,
         result.summary_json_path,
     )
-    return result.exit_code
+    _finish(result.exit_code)
 
 
-def _snapshot_fetch_command(args: argparse.Namespace) -> int:
+app.add_typer(
+    snapshot_app,
+    name="snapshot",
+    help="Manage official MaveDB bulk snapshots.",
+)
+
+
+@snapshot_app.command(
+    "fetch",
+    help="Resolve, verify, and cache a MaveDB bulk snapshot.",
+    context_settings=_HELP_CONTEXT,
+)
+def _snapshot_fetch_command(
+    latest: Annotated[
+        bool,
+        typer.Option(
+            "--latest",
+            help="Resolve the latest concrete MaveDB snapshot.",
+        ),
+    ] = False,
+    record: Annotated[
+        str | None,
+        typer.Option(
+            "--record",
+            parser=_positive_record_id,
+            metavar="RECORD",
+            help="Use one fixed concrete Zenodo record ID.",
+        ),
+    ] = None,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            parser=_non_empty_path,
+            metavar="CACHE_DIR",
+        ),
+    ] = None,
+    refresh: Annotated[bool, typer.Option("--refresh")] = False,
+    output_format: Annotated[
+        _OutputFormat,
+        typer.Option("--format"),
+    ] = _OutputFormat.text,
+    log_level: Annotated[
+        _LogLevel,
+        typer.Option(
+            "--log-level",
+            help="Set the process logging level (default: INFO).",
+        ),
+    ] = _LogLevel.info,
+) -> None:
     """Resolve and prepare one managed MaveDB bulk snapshot."""
-    cache_root = _cache_root_from_args(args)
-    selector = "latest" if args.latest else args.record
+    _start_command(log_level)
+    selector = _snapshot_selection(latest, record)
     try:
         result = fetch_mavedb_snapshot(
             selector,
-            cache=FilesystemCache(cache_root),
-            refresh=args.refresh,
+            cache=FilesystemCache(_cache_root(cache_dir)),
+            refresh=refresh,
         )
         rendered = (
             _render_snapshot_text(result)
-            if args.format == "text"
+            if output_format is _OutputFormat.text
             else _render_json(_snapshot_values(result))
         )
         _publish_output(rendered, None)
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("MaveDB snapshot fetch failed: %s", exc)
-        return 1
-    return 0
+        raise typer.Exit(1) from None
 
 
-def _snapshot_extract_command(args: argparse.Namespace) -> int:
+@snapshot_app.command(
+    "extract",
+    help=(
+        "Extract selected raw score/count CSVs from a managed MaveDB snapshot. "
+        "An uncached snapshot may download approximately 1.9 GB."
+    ),
+    short_help="Extract selected raw score/count CSVs from a managed snapshot.",
+    context_settings=_HELP_CONTEXT,
+)
+def _snapshot_extract_command(
+    dataset_ids: Annotated[
+        list[str],
+        typer.Option(
+            "--dataset-id",
+            parser=_snapshot_table_dataset_id,
+            metavar="DATASET_ID",
+            help="Canonical MaveDB score-set URN; repeat for multiple tables.",
+        ),
+    ],
+    latest: Annotated[
+        bool,
+        typer.Option(
+            "--latest",
+            help="Resolve the latest concrete MaveDB snapshot.",
+        ),
+    ] = False,
+    record: Annotated[
+        str | None,
+        typer.Option(
+            "--record",
+            parser=_positive_record_id,
+            metavar="RECORD",
+            help="Use one fixed concrete Zenodo record ID.",
+        ),
+    ] = None,
+    include_superseded: Annotated[
+        bool,
+        typer.Option("--include-superseded"),
+    ] = False,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            parser=_non_empty_path,
+            metavar="CACHE_DIR",
+        ),
+    ] = None,
+    refresh: Annotated[bool, typer.Option("--refresh")] = False,
+    output_format: Annotated[
+        _OutputFormat,
+        typer.Option("--format"),
+    ] = _OutputFormat.text,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            parser=_non_empty_path,
+            metavar="OUTPUT",
+        ),
+    ] = None,
+    log_level: Annotated[
+        _LogLevel,
+        typer.Option(
+            "--log-level",
+            help="Set the process logging level (default: INFO).",
+        ),
+    ] = _LogLevel.info,
+) -> None:
     """Resolve one managed snapshot and extract explicit raw score tables."""
+    _start_command(log_level)
+    selector = _snapshot_selection(latest, record)
     try:
-        dataset_ids = _validate_snapshot_table_dataset_ids(args.dataset_id)
+        validated_ids = _validate_snapshot_table_dataset_ids(dataset_ids)
     except MaveDBSnapshotTableError as exc:
-        args.command_parser.error(str(exc))
+        _usage_error(str(exc))
 
-    cache_root = _cache_root_from_args(args)
-    cache = FilesystemCache(cache_root)
-    selector = "latest" if args.latest else args.record
+    cache = FilesystemCache(_cache_root(cache_dir))
     try:
         snapshot = fetch_mavedb_snapshot(
             selector,
             cache=cache,
-            refresh=args.refresh,
+            refresh=refresh,
         )
         result = extract_mavedb_snapshot_tables(
             snapshot,
-            dataset_ids,
+            validated_ids,
             cache=cache,
-            include_superseded=args.include_superseded,
-            refresh=args.refresh,
+            include_superseded=include_superseded,
+            refresh=refresh,
         )
         rendered = (
             _render_snapshot_table_text(result)
-            if args.format == "text"
+            if output_format is _OutputFormat.text
             else _render_json(_snapshot_table_extraction_values(result))
         )
-        _publish_output(rendered, args.output)
+        _publish_output(rendered, output)
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("MaveDB snapshot table extraction failed: %s", exc)
-        return 1
-    return 0
+        raise typer.Exit(1) from None
 
 
-def _discover_command(args: argparse.Namespace) -> int:
+@app.command(
+    "discover",
+    help="Search score sets in a local MaveDB bulk catalog.",
+    context_settings=_HELP_CONTEXT,
+)
+def _discover_command(
+    query: Annotated[
+        str,
+        typer.Option(
+            "--query",
+            "-q",
+            parser=_non_empty_query,
+            metavar="QUERY",
+        ),
+    ],
+    main_json: Annotated[
+        Path | None,
+        typer.Option(
+            "--main-json",
+            parser=_non_empty_path,
+            metavar="MAIN_JSON",
+            help="Use a local extracted MaveDB main.json.",
+        ),
+    ] = None,
+    snapshot: Annotated[
+        str | None,
+        typer.Option(
+            "--snapshot",
+            parser=_snapshot_selector,
+            metavar="SNAPSHOT",
+            help="Use 'latest' or one concrete managed snapshot record ID.",
+        ),
+    ] = None,
+    include_superseded: Annotated[
+        bool,
+        typer.Option("--include-superseded"),
+    ] = False,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            parser=_non_empty_path,
+            metavar="CACHE_DIR",
+        ),
+    ] = None,
+    refresh: Annotated[bool, typer.Option("--refresh")] = False,
+    output_format: Annotated[
+        _OutputFormat,
+        typer.Option("--format"),
+    ] = _OutputFormat.text,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            parser=_non_empty_path,
+            metavar="OUTPUT",
+        ),
+    ] = None,
+    log_level: Annotated[
+        _LogLevel,
+        typer.Option(
+            "--log-level",
+            help="Set the process logging level (default: INFO).",
+        ),
+    ] = _LogLevel.info,
+) -> None:
     """Search one local or managed MaveDB bulk catalog."""
-    if args.main_json is not None:
+    _start_command(log_level)
+    if (main_json is None) == (snapshot is None):
+        _usage_error("exactly one of --main-json or --snapshot is required")
+    if main_json is not None:
         unsupported = [
             option
             for option, supplied in (
-                ("--cache-dir", args.cache_dir is not None),
-                ("--refresh", args.refresh),
+                ("--cache-dir", cache_dir is not None),
+                ("--refresh", refresh),
             )
             if supplied
         ]
         if unsupported:
-            args.command_parser.error(
+            _usage_error(
                 "--main-json does not support " + ", ".join(unsupported)
             )
 
     try:
-        if args.main_json is not None:
-            catalog_path = args.main_json.expanduser()
+        if main_json is not None:
+            catalog_path = main_json.expanduser()
             source = {"kind": "local"}
         else:
-            cache_root = _cache_root_from_args(args)
-            snapshot = fetch_mavedb_snapshot(
-                args.snapshot,
-                cache=FilesystemCache(cache_root),
-                refresh=args.refresh,
+            assert snapshot is not None
+            managed_snapshot = fetch_mavedb_snapshot(
+                snapshot,
+                cache=FilesystemCache(_cache_root(cache_dir)),
+                refresh=refresh,
             )
-            catalog_path = snapshot.main_json_path
-            source = _discovery_snapshot_source(snapshot)
+            catalog_path = managed_snapshot.main_json_path
+            source = _discovery_snapshot_source(managed_snapshot)
 
         catalog = MaveDBBulkCatalog.from_file(catalog_path)
         result = catalog.search_by_gene(
-            args.query,
-            include_superseded=args.include_superseded,
+            query,
+            include_superseded=include_superseded,
         )
         rendered = (
             _render_discovery_text(result, source)
-            if args.format == "text"
+            if output_format is _OutputFormat.text
             else _render_json(_discovery_values(result, source))
         )
-        _publish_output(rendered, args.output)
+        _publish_output(rendered, output)
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("MaveDB bulk discovery failed: %s", exc)
-        return 1
-    return 0
+        raise typer.Exit(1) from None
 
 
-def _catalog_cache(args: argparse.Namespace) -> FilesystemCache | None:
+def _snapshot_selection(latest: bool, record: str | None) -> str:
+    """Return exactly one validated snapshot selector."""
+    if latest == (record is not None):
+        _usage_error("exactly one of --latest or --record is required")
+    return "latest" if latest else record or ""
+
+
+def _catalog_cache(
+    source: str,
+    *,
+    variant_type: str | None,
+    cache_dir: Path | None,
+    refresh: bool,
+) -> FilesystemCache | None:
     """Validate source-specific options and lazily create a ProteinGym cache."""
-    if args.source == "mavedb":
+    if source == "mavedb":
         unsupported = [
             option
             for option, supplied in (
-                ("--variant-type", args.variant_type is not None),
-                ("--cache-dir", args.cache_dir is not None),
-                ("--refresh", args.refresh),
+                ("--variant-type", variant_type is not None),
+                ("--cache-dir", cache_dir is not None),
+                ("--refresh", refresh),
             )
             if supplied
         ]
         if unsupported:
-            args.command_parser.error(
+            _usage_error(
                 "source mavedb does not support " + ", ".join(unsupported)
             )
         return None
 
-    return FilesystemCache(_cache_root_from_args(args))
+    return FilesystemCache(_cache_root(cache_dir))
 
 
 def _default_cache_root() -> Path:
@@ -713,11 +1001,25 @@ def _default_cache_root() -> Path:
     return Path.home() / ".cache" / "dms-parser"
 
 
-def _cache_root_from_args(args: argparse.Namespace) -> Path:
+def _cache_root(cache_dir: Path | None) -> Path:
     """Resolve an optional CLI cache directory without creating it."""
-    if args.cache_dir is not None:
-        return args.cache_dir.expanduser()
-    return _default_cache_root()
+    return cache_dir.expanduser() if cache_dir is not None else _default_cache_root()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Invoke the Typer application with the historical compatibility contract."""
+    global _COMPATIBILITY_OUTCOME
+    _COMPATIBILITY_OUTCOME = None
+    try:
+        app(args=argv, prog_name="dms-parser", standalone_mode=True)
+    except SystemExit as exc:
+        outcome = _COMPATIBILITY_OUTCOME
+        _COMPATIBILITY_OUTCOME = None
+        if outcome == "command":
+            return int(exc.code or 0)
+        raise
+    _COMPATIBILITY_OUTCOME = None
+    return 0
 
 
 def _record_values(record: DatasetRecord) -> dict[str, Any]:
