@@ -230,6 +230,137 @@ def _maybe_add_transforms(
     return out
 
 
+def _finalize_dataset(
+    df: pd.DataFrame,
+    parsed_df: pd.DataFrame,
+    *,
+    source: str,
+    score_col: str,
+    wt_sequence: str,
+    dataset_id: str | None,
+    protein_id: str | None,
+    gene: str | None,
+    uniprot_id: str | None,
+    variant_info: pd.DataFrame | None = None,
+    add_relative_score: bool,
+    relative_method: str,
+    relative_output_col: str,
+    add_binary_label: bool,
+    delta: float,
+    higher_is_better: bool,
+    binary_output_col: str,
+    add_wildtype_row: bool,
+    drop_failed: bool,
+    validate_output: bool,
+    require_wt_for_transforms: bool,
+) -> pd.DataFrame:
+    """Apply the common post-parse dataset construction stages."""
+    out = df.copy()
+    out["dataset_id"] = dataset_id
+    out["source"] = source
+    out["protein_id"] = protein_id
+    out["gene"] = gene
+    out["uniprot_id"] = uniprot_id
+    out["wt_sequence"] = wt_sequence
+
+    out["variant"] = parsed_df["variant"]
+    out["mutated_sequence"] = parsed_df["mutated_sequence"]
+    out["status"] = parsed_df["status"]
+    out["error"] = parsed_df["error"]
+    out["is_wildtype"] = parsed_df["is_wildtype"]
+    out["is_synthetic"] = False
+    out["n_mutations"] = parsed_df["n_mutations"]
+    out["score_raw"] = pd.to_numeric(out[score_col], errors="coerce")
+    if variant_info is not None:
+        out = pd.concat([out, variant_info], axis=1)
+
+    validated_rows = int((parsed_df["status"] == "OK").sum())
+    unsupported_rows = int((parsed_df["status"] == "Unsupported").sum())
+    error_rows = int((parsed_df["status"] == "Error").sum())
+    if drop_failed:
+        out = out[out["status"] == "OK"].copy()
+
+    out = _maybe_add_wildtype_row(
+        out,
+        add_wildtype_row=add_wildtype_row,
+        wt_sequence=wt_sequence,
+        dataset_id=dataset_id,
+        source=source,
+        protein_id=protein_id,
+        gene=gene,
+        uniprot_id=uniprot_id,
+    )
+
+    if add_relative_score:
+        try:
+            out = _maybe_add_transforms(
+                out,
+                score_col="score_raw",
+                add_relative_score=True,
+                relative_method=relative_method,
+                relative_output_col=relative_output_col,
+                add_binary_label=add_binary_label,
+                delta=delta,
+                higher_is_better=higher_is_better,
+                binary_output_col=binary_output_col,
+            )
+        except MissingWildTypeError as exc:
+            if require_wt_for_transforms:
+                raise ValueError(
+                    "WT-relative transforms were requested, but no valid numeric WT score was found."
+                ) from exc
+            logger.warning(
+                "Skipped requested WT-relative transformation source=%s "
+                "dataset_id=%s reason=no_valid_numeric_wild_type_score",
+                source,
+                dataset_id,
+            )
+        else:
+            logger.info(
+                "Applied score transformations source=%s dataset_id=%s "
+                "relative_method=%s binary_label=%s",
+                source,
+                dataset_id,
+                relative_method,
+                add_binary_label,
+            )
+    elif add_binary_label:
+        raise ValueError(
+            "add_binary_label=True requires add_relative_score=True in this builder version."
+        )
+
+    if validate_output:
+        validate_standard_dataset(
+            out,
+            require_wt=False,
+            require_status=True,
+            score_col="score_raw",
+            variant_col="variant",
+            wt_col="is_wildtype",
+            n_mutations_col="n_mutations",
+        )
+        validate_consistent_sequence_lengths(
+            out,
+            wt_sequence_col="wt_sequence",
+            mutated_sequence_col="mutated_sequence",
+            only_status_ok=True,
+            status_col="status",
+        )
+
+    logger.info(
+        "Completed dataset build source=%s dataset_id=%s input_rows=%d "
+        "output_rows=%d validated_rows=%d unsupported_rows=%d error_rows=%d",
+        source,
+        dataset_id,
+        len(df),
+        len(out),
+        validated_rows,
+        unsupported_rows,
+        error_rows,
+    )
+    return out
+
+
 def build_mavedb_dataset(
     input_path: str | Path,
     score_col: str,
@@ -287,99 +418,28 @@ def build_mavedb_dataset(
     parsed = df[hgvs_col].apply(lambda value: _safe_hgvs_to_sequence(wt_seq, value))
     parsed_df = pd.DataFrame(parsed.tolist(), index=df.index)
 
-    out = df.copy()
-    out["dataset_id"] = dataset_id
-    out["source"] = "mavedb"
-    out["protein_id"] = protein_id
-    out["gene"] = gene
-    out["uniprot_id"] = uniprot_id
-    out["wt_sequence"] = wt_seq
-
-    out["variant"] = parsed_df["variant"]
-    out["mutated_sequence"] = parsed_df["mutated_sequence"]
-    out["status"] = parsed_df["status"]
-    out["error"] = parsed_df["error"]
-    out["is_wildtype"] = parsed_df["is_wildtype"]
-    out["is_synthetic"] = False
-    out["n_mutations"] = parsed_df["n_mutations"]
-
-    out["score_raw"] = pd.to_numeric(out[score_col], errors="coerce")
-    validated_rows = int((parsed_df["status"] == "OK").sum())
-    unsupported_rows = int((parsed_df["status"] == "Unsupported").sum())
-    error_rows = int((parsed_df["status"] == "Error").sum())
-
-    if drop_failed:
-        out = out[out["status"] == "OK"].copy()
-
-    out = _maybe_add_wildtype_row(
-        out,
-        add_wildtype_row=add_wildtype_row,
+    return _finalize_dataset(
+        df,
+        parsed_df,
+        source="mavedb",
+        score_col=score_col,
         wt_sequence=wt_seq,
         dataset_id=dataset_id,
-        source="mavedb",
         protein_id=protein_id,
         gene=gene,
         uniprot_id=uniprot_id,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+        add_wildtype_row=add_wildtype_row,
+        drop_failed=drop_failed,
+        validate_output=validate_output,
+        require_wt_for_transforms=require_wt_for_transforms,
     )
-
-    if add_relative_score:
-        try:
-            out = _maybe_add_transforms(
-                out,
-                score_col="score_raw",
-                add_relative_score=True,
-                relative_method=relative_method,
-                relative_output_col=relative_output_col,
-                add_binary_label=add_binary_label,
-                delta=delta,
-                higher_is_better=higher_is_better,
-                binary_output_col=binary_output_col,
-            )
-        except MissingWildTypeError as exc:
-            if require_wt_for_transforms:
-                raise ValueError(
-                    "WT-relative transforms were requested, but no valid numeric WT score was found."
-                ) from exc
-            logger.warning(
-                "Skipped requested WT-relative transformation source=mavedb "
-                "dataset_id=%s reason=no_valid_numeric_wild_type_score",
-                dataset_id,
-            )
-        else:
-            logger.info(
-                "Applied score transformations source=mavedb dataset_id=%s "
-                "relative_method=%s binary_label=%s",
-                dataset_id, relative_method, add_binary_label,
-            )
-    elif add_binary_label:
-        raise ValueError(
-            "add_binary_label=True requires add_relative_score=True in this builder version."
-        )
-
-    if validate_output:
-        validate_standard_dataset(
-            out,
-            require_wt=False,
-            require_status=True,
-            score_col="score_raw",
-            variant_col="variant",
-            wt_col="is_wildtype",
-            n_mutations_col="n_mutations",
-        )
-        validate_consistent_sequence_lengths(
-            out,
-            wt_sequence_col="wt_sequence",
-            mutated_sequence_col="mutated_sequence",
-            only_status_ok=True,
-            status_col="status",
-        )
-
-    logger.info(
-        "Completed dataset build source=mavedb dataset_id=%s input_rows=%d "
-        "output_rows=%d validated_rows=%d unsupported_rows=%d error_rows=%d",
-        dataset_id, input_rows, len(out), validated_rows, unsupported_rows, error_rows,
-    )
-    return out
 
 
 def build_proteingym_dataset(
@@ -453,97 +513,26 @@ def build_proteingym_dataset(
         prefix="parsed_",
     )
 
-    out = df.copy()
-    out["dataset_id"] = dataset_id
-    out["source"] = "proteingym"
-    out["protein_id"] = protein_id
-    out["gene"] = gene
-    out["uniprot_id"] = uniprot_id
-    out["wt_sequence"] = wt_seq
-
-    out["variant"] = parsed_df["variant"]
-    out["mutated_sequence"] = parsed_df["mutated_sequence"]
-    out["status"] = parsed_df["status"]
-    out["error"] = parsed_df["error"]
-    out["is_wildtype"] = parsed_df["is_wildtype"]
-    out["is_synthetic"] = False
-    out["n_mutations"] = parsed_df["n_mutations"]
-
-    out["score_raw"] = pd.to_numeric(out[score_col], errors="coerce")
-    out = pd.concat([out, variant_info], axis=1)
-    validated_rows = int((parsed_df["status"] == "OK").sum())
-    unsupported_rows = int((parsed_df["status"] == "Unsupported").sum())
-    error_rows = int((parsed_df["status"] == "Error").sum())
-
-    if drop_failed:
-        out = out[out["status"] == "OK"].copy()
-
-    out = _maybe_add_wildtype_row(
-        out,
-        add_wildtype_row=add_wildtype_row,
+    return _finalize_dataset(
+        df,
+        parsed_df,
+        source="proteingym",
+        score_col=score_col,
         wt_sequence=wt_seq,
         dataset_id=dataset_id,
-        source="proteingym",
         protein_id=protein_id,
         gene=gene,
         uniprot_id=uniprot_id,
+        variant_info=variant_info,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+        add_wildtype_row=add_wildtype_row,
+        drop_failed=drop_failed,
+        validate_output=validate_output,
+        require_wt_for_transforms=require_wt_for_transforms,
     )
-
-    if add_relative_score:
-        try:
-            out = _maybe_add_transforms(
-                out,
-                score_col="score_raw",
-                add_relative_score=True,
-                relative_method=relative_method,
-                relative_output_col=relative_output_col,
-                add_binary_label=add_binary_label,
-                delta=delta,
-                higher_is_better=higher_is_better,
-                binary_output_col=binary_output_col,
-            )
-        except MissingWildTypeError as exc:
-            if require_wt_for_transforms:
-                raise ValueError(
-                    "WT-relative transforms were requested, but no valid numeric WT score was found."
-                ) from exc
-            logger.warning(
-                "Skipped requested WT-relative transformation source=proteingym "
-                "dataset_id=%s reason=no_valid_numeric_wild_type_score",
-                dataset_id,
-            )
-        else:
-            logger.info(
-                "Applied score transformations source=proteingym dataset_id=%s "
-                "relative_method=%s binary_label=%s",
-                dataset_id, relative_method, add_binary_label,
-            )
-    elif add_binary_label:
-        raise ValueError(
-            "add_binary_label=True requires add_relative_score=True in this builder version."
-        )
-
-    if validate_output:
-        validate_standard_dataset(
-            out,
-            require_wt=False,
-            require_status=True,
-            score_col="score_raw",
-            variant_col="variant",
-            wt_col="is_wildtype",
-            n_mutations_col="n_mutations",
-        )
-        validate_consistent_sequence_lengths(
-            out,
-            wt_sequence_col="wt_sequence",
-            mutated_sequence_col="mutated_sequence",
-            only_status_ok=True,
-            status_col="status",
-        )
-
-    logger.info(
-        "Completed dataset build source=proteingym dataset_id=%s input_rows=%d "
-        "output_rows=%d validated_rows=%d unsupported_rows=%d error_rows=%d",
-        dataset_id, input_rows, len(out), validated_rows, unsupported_rows, error_rows,
-    )
-    return out

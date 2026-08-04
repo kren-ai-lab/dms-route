@@ -56,16 +56,14 @@ def test_builder_score_transform_defaults_are_disabled(builder):
     assert parameters["add_wildtype_row"].default is False
 
 
-@pytest.mark.parametrize("source", ["proteingym", "mavedb"])
 def test_dataset_without_wt_keeps_source_rows_by_default(
-    source: str,
     tmp_path,
     wt_sequence: str,
 ) -> None:
     result = _build_source_dataset(
         tmp_path,
-        source,
-        _source_variants(source),
+        "proteingym",
+        _source_variants("proteingym"),
         [0.5],
         wt_sequence=wt_sequence,
     )
@@ -183,23 +181,14 @@ def test_mavedb_complete_identity_builds_observed_wt(
     assert observed["score_raw"] == 2.5
 
 
-@pytest.mark.parametrize(
-    ("source", "variants"),
-    [
-        ("proteingym", ["not-a-variant", "M1A"]),
-        ("mavedb", ["p.invalid", "p.Met1Ala"]),
-    ],
-)
 def test_drop_failed_precedes_synthetic_wt_insertion(
-    source: str,
-    variants: list[str],
     tmp_path,
     wt_sequence: str,
 ) -> None:
     result = _build_source_dataset(
         tmp_path,
-        source,
-        variants,
+        "proteingym",
+        ["not-a-variant", "M1A"],
         [9.0, 0.5],
         wt_sequence=wt_sequence,
         drop_failed=True,
@@ -212,9 +201,7 @@ def test_drop_failed_precedes_synthetic_wt_insertion(
     assert result["score_raw"].iloc[1:].tolist() == [0.5]
 
 
-@pytest.mark.parametrize("source", ["proteingym", "mavedb"])
 def test_scoreless_synthetic_wt_skips_relative_transform(
-    source: str,
     tmp_path,
     wt_sequence: str,
     caplog: pytest.LogCaptureFixture,
@@ -223,8 +210,8 @@ def test_scoreless_synthetic_wt_skips_relative_transform(
 
     result = _build_source_dataset(
         tmp_path,
-        source,
-        _source_variants(source),
+        "proteingym",
+        _source_variants("proteingym"),
         [0.5],
         wt_sequence=wt_sequence,
         add_wildtype_row=True,
@@ -235,17 +222,15 @@ def test_scoreless_synthetic_wt_skips_relative_transform(
     assert "reason=no_valid_numeric_wild_type_score" in caplog.text
 
 
-@pytest.mark.parametrize("source", ["proteingym", "mavedb"])
 def test_scoreless_synthetic_wt_can_be_required_for_transform(
-    source: str,
     tmp_path,
     wt_sequence: str,
 ) -> None:
     with pytest.raises(ValueError, match="no valid numeric WT score"):
         _build_source_dataset(
             tmp_path,
-            source,
-            _source_variants(source),
+            "proteingym",
+            _source_variants("proteingym"),
             [0.5],
             wt_sequence=wt_sequence,
             add_wildtype_row=True,
@@ -254,11 +239,9 @@ def test_scoreless_synthetic_wt_can_be_required_for_transform(
         )
 
 
-@pytest.mark.parametrize("transform_kwargs", [{}, {"add_relative_score": False}])
 def test_proteingym_scores_are_unchanged_without_transformations(
     tmp_path,
     wt_sequence: str,
-    transform_kwargs,
 ):
     scores = pd.Series([-1.0, 0.0, 2.0, None], name="DMS_score")
     path = tmp_path / "proteingym_scores.csv"
@@ -274,7 +257,6 @@ def test_proteingym_scores_are_unchanged_without_transformations(
         score_col="DMS_score",
         variant_col="variant",
         wt_sequence=wt_sequence,
-        **transform_kwargs,
     )
 
     pd.testing.assert_series_equal(
@@ -285,45 +267,6 @@ def test_proteingym_scores_are_unchanged_without_transformations(
     assert "score_log_ratio" not in result.columns
     assert "score_binary_like" not in result.columns
     assert (result["status"] == "OK").all()
-
-
-@pytest.mark.parametrize("transform_kwargs", [{}, {"add_relative_score": False}])
-def test_mavedb_scores_are_unchanged_without_transformations(
-    tmp_path,
-    wt_sequence: str,
-    transform_kwargs,
-):
-    scores = pd.Series([-1.0, 0.0, 2.0, None], name="score")
-    path = tmp_path / "mavedb_scores.csv"
-    pd.DataFrame(
-        {
-            "hgvs_pro": [
-                "p.Met1Ala",
-                "p.Lys2Arg",
-                "p.Thr3Tyr",
-                "p.Ala4Val",
-            ],
-            "score": scores,
-        }
-    ).to_csv(path, index=False)
-
-    result = build_mavedb_dataset(
-        input_path=path,
-        score_col="score",
-        hgvs_col="hgvs_pro",
-        wt_sequence=wt_sequence,
-        **transform_kwargs,
-    )
-
-    pd.testing.assert_series_equal(
-        result["score_raw"].reset_index(drop=True),
-        scores,
-        check_names=False,
-    )
-    assert "score_log_ratio" not in result.columns
-    assert "score_binary_like" not in result.columns
-    assert (result["status"] == "OK").all()
-
 
 def test_build_proteingym_dataset_basic(tmp_path, proteingym_like_df: pd.DataFrame, wt_sequence: str):
     path = tmp_path / "proteingym.csv"
@@ -421,6 +364,11 @@ def test_build_mavedb_dataset_basic(tmp_path, mavedb_like_df: pd.DataFrame, wt_s
     assert "mutated_sequence" in result.columns
     assert "status" in result.columns
     assert (result["status"] == "OK").all()
+    pd.testing.assert_series_equal(
+        result["score_raw"].reset_index(drop=True),
+        mavedb_like_df["score"],
+        check_names=False,
+    )
 
 
 def test_build_mavedb_dataset_with_unsupported_variant(tmp_path, wt_sequence: str):

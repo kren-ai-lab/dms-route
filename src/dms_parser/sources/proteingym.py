@@ -9,14 +9,11 @@ from typing import Optional
 import pandas as pd
 
 from dms_parser.cache import FilesystemCache
-from dms_parser.exceptions import InvalidCacheEntryError
-from dms_parser.fetch import fetch_to_cache
 from dms_parser.io import (
-    download_file,
     ensure_local_copy as ensure_local_dataset_copy,
-    infer_filename_from_url,
     read_table,
 )
+from dms_parser.sources._dataset_adapter import download_source_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -37,50 +34,19 @@ def download_proteingym_dataset(
     artifact path is returned. ``output_dir`` and ``filename`` apply only to
     uncached downloads.
     """
-    logger.info(
-        "Starting source download source=proteingym dataset_id=%s cache_enabled=%s",
-        dataset_id, cache is not None,
+    return download_source_dataset(
+        url,
+        output_dir,
+        filename,
+        overwrite=overwrite,
+        cache=cache,
+        dataset_id=dataset_id,
+        refresh=refresh,
+        source="proteingym",
+        source_label="ProteinGym",
+        default_filename="proteingym_dataset.csv",
+        logger=logger,
     )
-    logger.debug(
-        "Source download options source=proteingym dataset_id=%s overwrite=%s "
-        "refresh=%s",
-        dataset_id, overwrite, refresh,
-    )
-    if cache is not None:
-        if dataset_id is None:
-            raise InvalidCacheEntryError(
-                "dataset_id is required when caching a ProteinGym dataset."
-            )
-        if overwrite:
-            raise InvalidCacheEntryError(
-                "overwrite cannot be used with a cache; use refresh=True."
-            )
-        path = fetch_to_cache(
-            url,
-            source="proteingym",
-            dataset_id=dataset_id,
-            cache=cache,
-            refresh=refresh,
-        )
-        logger.info("Completed source download source=proteingym dataset_id=%s", dataset_id)
-        logger.debug("Resolved source artifact source=proteingym dataset_id=%s path=%s", dataset_id, path)
-        return path
-
-    if refresh:
-        raise InvalidCacheEntryError(
-            "refresh requires a cache; use overwrite=True for an uncached download."
-        )
-
-    output_dir = Path(output_dir)
-
-    if filename is None:
-        filename = infer_filename_from_url(url, default_name="proteingym_dataset.csv")
-
-    output_path = output_dir / filename
-    logger.debug("Resolved source output source=proteingym dataset_id=%s path=%s", dataset_id, output_path)
-    path = download_file(url, output_path, overwrite=overwrite)
-    logger.info("Completed source download source=proteingym dataset_id=%s", dataset_id)
-    return path
 
 
 def load_proteingym_dataset(

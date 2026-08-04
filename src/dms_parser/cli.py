@@ -189,6 +189,28 @@ def _add_log_level_option(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_download_options(
+    parser: argparse.ArgumentParser,
+    *,
+    multiple: bool,
+) -> None:
+    """Add the shared single- and multi-download arguments."""
+    parser.add_argument("--source", choices=_CATALOG_SOURCES, required=True)
+    parser.add_argument(
+        "--dataset-id",
+        required=True,
+        type=_batch_dataset_id if multiple else _non_empty_dataset_id,
+        **({"action": "append"} if multiple else {}),
+    )
+    parser.add_argument("--output-dir", required=True, type=_non_empty_path)
+    parser.add_argument("--cache-dir", type=_non_empty_path)
+    parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--drop-failed", action="store_true")
+    parser.add_argument("--add-wildtype-row", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
+    _add_log_level_option(parser)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the parser for the installed ``dms-parser`` command."""
     parser = argparse.ArgumentParser(
@@ -222,12 +244,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "or writing processed output."
         ),
     )
-    run_parser.add_argument(
-        "--log-level",
-        choices=_LOG_LEVELS,
-        default="INFO",
-        help="Set the process logging level (default: INFO).",
-    )
+    _add_log_level_option(run_parser)
     run_parser.set_defaults(handler=_run_command)
 
     list_parser = subparsers.add_parser(
@@ -258,32 +275,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "download",
         help="Download and standardize one substitutions dataset.",
     )
-    download_parser.add_argument(
-        "--source",
-        choices=_CATALOG_SOURCES,
-        required=True,
-    )
-    download_parser.add_argument(
-        "--dataset-id",
-        required=True,
-        type=_non_empty_dataset_id,
-    )
-    download_parser.add_argument(
-        "--output-dir",
-        required=True,
-        type=_non_empty_path,
-    )
-    download_parser.add_argument("--cache-dir", type=_non_empty_path)
-    download_parser.add_argument("--refresh", action="store_true")
-    download_parser.add_argument("--drop-failed", action="store_true")
-    download_parser.add_argument("--add-wildtype-row", action="store_true")
-    download_parser.add_argument("--overwrite", action="store_true")
-    download_parser.add_argument(
-        "--log-level",
-        choices=_LOG_LEVELS,
-        default="INFO",
-        help="Set the process logging level (default: INFO).",
-    )
+    _add_download_options(download_parser, multiple=False)
     download_parser.set_defaults(
         handler=_download_command,
         command_parser=download_parser,
@@ -293,33 +285,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "download-many",
         help="Download and standardize several substitutions datasets.",
     )
-    download_many_parser.add_argument(
-        "--source",
-        choices=_CATALOG_SOURCES,
-        required=True,
-    )
-    download_many_parser.add_argument(
-        "--dataset-id",
-        action="append",
-        required=True,
-        type=_batch_dataset_id,
-    )
-    download_many_parser.add_argument(
-        "--output-dir",
-        required=True,
-        type=_non_empty_path,
-    )
-    download_many_parser.add_argument("--cache-dir", type=_non_empty_path)
-    download_many_parser.add_argument("--refresh", action="store_true")
-    download_many_parser.add_argument("--drop-failed", action="store_true")
-    download_many_parser.add_argument("--add-wildtype-row", action="store_true")
-    download_many_parser.add_argument("--overwrite", action="store_true")
-    download_many_parser.add_argument(
-        "--log-level",
-        choices=_LOG_LEVELS,
-        default="INFO",
-        help="Set the process logging level (default: INFO).",
-    )
+    _add_download_options(download_many_parser, multiple=True)
     download_many_parser.set_defaults(
         handler=_download_many_command,
         command_parser=download_many_parser,
@@ -406,12 +372,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="text",
     )
     discover_parser.add_argument("--output", "-o", type=_non_empty_path)
-    discover_parser.add_argument(
-        "--log-level",
-        choices=_LOG_LEVELS,
-        default="INFO",
-        help="Set the process logging level (default: INFO).",
-    )
+    _add_log_level_option(discover_parser)
     discover_parser.set_defaults(
         handler=_discover_command,
         command_parser=discover_parser,
@@ -426,12 +387,7 @@ def _add_catalog_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--format", choices=_OUTPUT_FORMATS, default="text")
     parser.add_argument("--output", "-o", type=Path)
-    parser.add_argument(
-        "--log-level",
-        choices=_LOG_LEVELS,
-        default="INFO",
-        help="Set the process logging level (default: INFO).",
-    )
+    _add_log_level_option(parser)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -518,11 +474,7 @@ def _download_command(args: argparse.Namespace) -> int:
     except SourceConfigurationError as exc:
         args.command_parser.error(str(exc))
 
-    cache_root = (
-        args.cache_dir.expanduser()
-        if args.cache_dir is not None
-        else _default_cache_root()
-    )
+    cache_root = _cache_root_from_args(args)
     try:
         result = download_and_standardize_dataset(
             args.source,
@@ -566,11 +518,7 @@ def _download_many_command(args: argparse.Namespace) -> int:
         logger.error("Dataset batch preflight failed: %s", exc)
         return 1
 
-    cache_root = (
-        args.cache_dir.expanduser()
-        if args.cache_dir is not None
-        else _default_cache_root()
-    )
+    cache_root = _cache_root_from_args(args)
     try:
         result = download_and_standardize_datasets(
             args.source,
@@ -599,11 +547,7 @@ def _download_many_command(args: argparse.Namespace) -> int:
 
 def _snapshot_fetch_command(args: argparse.Namespace) -> int:
     """Resolve and prepare one managed MaveDB bulk snapshot."""
-    cache_root = (
-        args.cache_dir.expanduser()
-        if args.cache_dir is not None
-        else _default_cache_root()
-    )
+    cache_root = _cache_root_from_args(args)
     selector = "latest" if args.latest else args.record
     try:
         result = fetch_mavedb_snapshot(
@@ -630,11 +574,7 @@ def _snapshot_extract_command(args: argparse.Namespace) -> int:
     except MaveDBSnapshotTableError as exc:
         args.command_parser.error(str(exc))
 
-    cache_root = (
-        args.cache_dir.expanduser()
-        if args.cache_dir is not None
-        else _default_cache_root()
-    )
+    cache_root = _cache_root_from_args(args)
     cache = FilesystemCache(cache_root)
     selector = "latest" if args.latest else args.record
     try:
@@ -683,11 +623,7 @@ def _discover_command(args: argparse.Namespace) -> int:
             catalog_path = args.main_json.expanduser()
             source = {"kind": "local"}
         else:
-            cache_root = (
-                args.cache_dir.expanduser()
-                if args.cache_dir is not None
-                else _default_cache_root()
-            )
+            cache_root = _cache_root_from_args(args)
             snapshot = fetch_mavedb_snapshot(
                 args.snapshot,
                 cache=FilesystemCache(cache_root),
@@ -731,17 +667,19 @@ def _catalog_cache(args: argparse.Namespace) -> FilesystemCache | None:
             )
         return None
 
-    cache_root = (
-        args.cache_dir.expanduser()
-        if args.cache_dir is not None
-        else _default_cache_root()
-    )
-    return FilesystemCache(cache_root)
+    return FilesystemCache(_cache_root_from_args(args))
 
 
 def _default_cache_root() -> Path:
     """Return the shared default cache root without creating it."""
     return Path.home() / ".cache" / "dms-parser"
+
+
+def _cache_root_from_args(args: argparse.Namespace) -> Path:
+    """Resolve an optional CLI cache directory without creating it."""
+    if args.cache_dir is not None:
+        return args.cache_dir.expanduser()
+    return _default_cache_root()
 
 
 def _record_values(record: DatasetRecord) -> dict[str, Any]:

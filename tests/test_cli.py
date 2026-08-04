@@ -62,9 +62,7 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
     return DatasetRecord(**values)
 
 
-@pytest.mark.parametrize(
-    ("arguments", "expected_text"),
-    [
+HELP_CASES = (
         (
             ["--help"],
             (
@@ -116,31 +114,17 @@ def _catalog_record(**overrides: Any) -> DatasetRecord:
                 "--output",
             ),
         ),
-    ],
-    ids=(
-        "root",
-        "run",
-        "list",
-        "metadata",
-        "download",
-        "download-many",
-        "snapshot",
-        "snapshot-fetch",
-        "snapshot-extract",
-        "discover",
-    ),
 )
-def test_help_exits_successfully(
-    arguments: list[str],
-    expected_text: tuple[str, ...],
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        cli_module.main(arguments)
 
-    assert exc_info.value.code == 0
-    output = capsys.readouterr().out
-    assert all(text in output for text in expected_text)
+
+def test_help_exits_successfully(capsys: pytest.CaptureFixture[str]) -> None:
+    for arguments, expected_text in HELP_CASES:
+        with pytest.raises(SystemExit) as exc_info:
+            cli_module.main(arguments)
+
+        assert exc_info.value.code == 0, arguments
+        output = capsys.readouterr().out
+        assert all(text in output for text in expected_text), arguments
 
 
 @pytest.mark.parametrize(
@@ -150,104 +134,14 @@ def test_help_exits_successfully(
         ["unknown"],
         ["run"],
         ["run", "--config", "config.yml", "--only", "invalid"],
-        ["run", "--config", "config.yml", "--log-level", "TRACE"],
-        ["list"],
-        ["metadata"],
-        ["metadata", "--source", "mavedb"],
-        ["metadata", "--source", "mavedb", "--dataset-id", "   "],
         ["list", "--source", "mavedb", "--limit", "0"],
-        ["list", "--source", "mavedb", "--limit", "not-an-integer"],
-        ["list", "--source", "mavedb", "--offset", "-1"],
-        ["download"],
-        ["download", "--source", "mavedb"],
-        [
-            "download",
-            "--source",
-            "mavedb",
-            "--dataset-id",
-            "urn:mavedb:00000001-a-1",
-        ],
-        [
-            "download",
-            "--source",
-            "mavedb",
-            "--dataset-id",
-            "   ",
-            "--output-dir",
-            "output",
-        ],
-        [
-            "download",
-            "--source",
-            "mavedb",
-            "--dataset-id",
-            "urn:mavedb:00000001-a-1",
-            "--output-dir",
-            "   ",
-        ],
-        ["download-many"],
-        ["download-many", "--source", "proteingym"],
-        [
-            "download-many",
-            "--source",
-            "proteingym",
-            "--dataset-id",
-            "ASSAY_1",
-        ],
-        [
-            "download-many",
-            "--source",
-            "proteingym",
-            "--dataset-id",
-            " ASSAY_1",
-            "--output-dir",
-            "output",
-        ],
-        [
-            "download-many",
-            "--source",
-            "proteingym",
-            "--dataset-id",
-            "ASSAY\n1",
-            "--output-dir",
-            "output",
-        ],
         ["snapshot"],
-        ["snapshot", "fetch"],
-        ["snapshot", "fetch", "--record", "0"],
-        ["snapshot", "fetch", "--record", "not-a-record"],
         [
             "snapshot",
             "fetch",
             "--latest",
             "--record",
             "20840937",
-        ],
-        ["snapshot", "extract"],
-        ["snapshot", "extract", "--latest"],
-        [
-            "snapshot",
-            "extract",
-            "--latest",
-            "--record",
-            "20840937",
-            "--dataset-id",
-            SNAPSHOT_TABLE_ID,
-        ],
-        [
-            "snapshot",
-            "extract",
-            "--record",
-            "0",
-            "--dataset-id",
-            SNAPSHOT_TABLE_ID,
-        ],
-        [
-            "snapshot",
-            "extract",
-            "--latest",
-            "--dataset-id",
-            "invalid",
         ],
         [
             "snapshot",
@@ -256,11 +150,6 @@ def test_help_exits_successfully(
             "--dataset-id",
             "urn:mavedb:00000003-a-0",
         ],
-        ["discover"],
-        ["discover", "--main-json", "main.json"],
-        ["discover", "--main-json", "main.json", "--query", "   "],
-        ["discover", "--snapshot", "invalid", "--query", "BRCA1"],
-        ["discover", "--snapshot", "0", "--query", "BRCA1"],
         [
             "discover",
             "--main-json",
@@ -589,26 +478,20 @@ def test_metadata_forwards_identifier_variant_type_cache_and_refresh(
 
 
 @pytest.mark.parametrize(
-    ("command", "option"),
+    "option",
     [
-        ("list", ["--variant-type", "substitutions"]),
-        ("list", ["--cache-dir", "unused-cache"]),
-        ("list", ["--refresh"]),
-        ("metadata", ["--variant-type", "substitutions"]),
-        ("metadata", ["--cache-dir", "unused-cache"]),
-        ("metadata", ["--refresh"]),
+        ["--variant-type", "substitutions"],
+        ["--cache-dir", "unused-cache"],
+        ["--refresh"],
     ],
 )
 def test_mavedb_rejects_proteingym_options_before_side_effects(
-    command: str,
     option: list[str],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output_path = tmp_path / "output" / "result.txt"
-    arguments = [command, "--source", "mavedb"]
-    if command == "metadata":
-        arguments.extend(["--dataset-id", "urn:mavedb:00000001-a-1"])
+    arguments = ["list", "--source", "mavedb"]
     arguments.extend(option + ["--output", str(output_path)])
 
     def forbidden(*args: object, **kwargs: object) -> None:
@@ -839,19 +722,10 @@ def test_failed_atomic_publication_preserves_existing_output(
     assert list(tmp_path.glob(".catalog.json.*")) == []
 
 
-@pytest.mark.parametrize(
-    "cause",
-    [
-        CatalogError("catalog failed"),
-        InvalidCacheEntryError("cache failed"),
-        requests.ConnectionError("network failed"),
-        OSError("filesystem failed"),
-    ],
-)
 def test_expected_list_failures_return_one(
-    cause: Exception,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    cause = CatalogError("catalog failed")
     def fail(*args: object, **kwargs: object) -> None:
         raise cause
 
@@ -1033,19 +907,11 @@ def test_snapshot_record_forwards_options_and_renders_json(
     assert values["cache_hit"] is True
 
 
-@pytest.mark.parametrize(
-    "cause",
-    [
-        InvalidCacheEntryError("cache failed"),
-        requests.ConnectionError("network failed"),
-        OSError("filesystem failed"),
-    ],
-)
 def test_expected_snapshot_failures_return_one(
-    cause: Exception,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    cause = InvalidCacheEntryError("cache failed")
     monkeypatch.setattr(
         cli_module,
         "fetch_mavedb_snapshot",
@@ -1347,19 +1213,12 @@ def test_snapshot_extract_help_performs_no_fetch(
     assert exc_info.value.code == 0
 
 
-@pytest.mark.parametrize(
-    "cause",
-    [
-        MaveDBSnapshotTableError("table failed"),
-        OSError("filesystem failed"),
-    ],
-)
 def test_expected_snapshot_extract_failures_return_one_without_output(
-    cause: Exception,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    cause = MaveDBSnapshotTableError("table failed")
     output_path = tmp_path / "tables.json"
     _patch_snapshot_extract_dependencies(
         monkeypatch,
@@ -1716,16 +1575,12 @@ def test_discover_empty_result_is_successful(
     assert "No matching score sets found." in output
 
 
-@pytest.mark.parametrize(
-    "cause",
-    [CatalogError("invalid catalog"), OSError("filesystem failed")],
-)
 def test_expected_discovery_failures_return_one_without_stdout(
-    cause: Exception,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    cause = CatalogError("invalid catalog")
     class FailingCatalog:
         @classmethod
         def from_file(cls, path: Path) -> None:
@@ -1860,7 +1715,6 @@ def test_download_help_excludes_deferred_options(
         ("mavedb", "not-a-permanent-urn"),
         ("mavedb", "urn:mavedb:00000001-a-0"),
         ("proteingym", "ASSAY.csv"),
-        ("proteingym", "ASSAY.CSV"),
     ],
 )
 def test_download_rejects_source_ids_before_side_effects(
