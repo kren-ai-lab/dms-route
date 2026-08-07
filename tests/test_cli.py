@@ -78,16 +78,32 @@ HELP_CASES = (
                 "discover",
             ),
         ),
-        (["run", "--help"], ("--config", "--dry-run")),
+        (["run", "--help"], ("--config", "WT fallbacks", "--dry-run")),
         (["list", "--help"], ("--source", "--query", "--limit", "--format")),
         (["metadata", "--help"], ("--source", "--dataset-id", "--format")),
         (
             ["download", "--help"],
-            ("--source", "--dataset-id", "--output-dir", "--overwrite"),
+            (
+                "--source",
+                "--dataset-id",
+                "--output-dir",
+                "--wt-sequence",
+                "--wt-score",
+                "--add-relative-score",
+                "--overwrite",
+            ),
         ),
         (
             ["download-many", "--help"],
-            ("--source", "--dataset-id", "--output-dir", "--overwrite"),
+            (
+                "--source",
+                "--dataset-id",
+                "--output-dir",
+                "DATASET_ID=SEQUENCE",
+                "DATASET_ID=SCORE",
+                "--add-relative-score",
+                "--overwrite",
+            ),
         ),
         (["snapshot", "--help"], ("fetch", "extract")),
         (
@@ -2100,6 +2116,15 @@ def test_download_forwards_defaults_and_uses_default_cache(
         "refresh": False,
         "drop_failed": False,
         "add_wildtype_row": False,
+        "wt_sequence": None,
+        "wt_score": None,
+        "add_relative_score": False,
+        "relative_method": "log_ratio",
+        "relative_output_col": "score_log_ratio",
+        "add_binary_label": False,
+        "delta": 0.1,
+        "higher_is_better": True,
+        "binary_output_col": "score_binary_like",
         "overwrite": False,
         "acquisition": None,
         "snapshot_record_id": None,
@@ -2148,6 +2173,22 @@ def test_download_forwards_explicit_options_and_expands_paths(
             "--refresh",
             "--drop-failed",
             "--add-wildtype-row",
+            "--wt-sequence",
+            "MKT",
+            "--wt-score",
+            "1.25",
+            "--add-relative-score",
+            "--relative-method",
+            "difference",
+            "--relative-output-col",
+            "score_difference",
+            "--add-binary-label",
+            "--delta",
+            "0.2",
+            "--higher-is-better",
+            "false",
+            "--binary-output-col",
+            "activity_label",
             "--overwrite",
             "--acquisition",
             "snapshot",
@@ -2166,6 +2207,15 @@ def test_download_forwards_explicit_options_and_expands_paths(
     assert calls["refresh"] is True
     assert calls["drop_failed"] is True
     assert calls["add_wildtype_row"] is True
+    assert calls["wt_sequence"] == "MKT"
+    assert calls["wt_score"] == 1.25
+    assert calls["add_relative_score"] is True
+    assert calls["relative_method"] == "difference"
+    assert calls["relative_output_col"] == "score_difference"
+    assert calls["add_binary_label"] is True
+    assert calls["delta"] == 0.2
+    assert calls["higher_is_better"] is False
+    assert calls["binary_output_col"] == "activity_label"
     assert calls["overwrite"] is True
     assert calls["acquisition"] == "snapshot"
     assert calls["snapshot_record_id"] == "20840937"
@@ -2490,6 +2540,15 @@ def test_download_many_forwards_explicit_options_and_expands_paths(
             "--refresh",
             "--drop-failed",
             "--add-wildtype-row",
+            "--wt-sequence",
+            "urn:mavedb:00000001-a-1=MKT",
+            "--wt-score",
+            "urn:mavedb:00000001-a-1=-0.5",
+            "--add-relative-score",
+            "--relative-method",
+            "difference",
+            "--relative-output-col",
+            "score_difference",
             "--overwrite",
             "--acquisition",
             "snapshot",
@@ -2506,11 +2565,116 @@ def test_download_many_forwards_explicit_options_and_expands_paths(
     assert calls["refresh"] is True
     assert calls["drop_failed"] is True
     assert calls["add_wildtype_row"] is True
+    assert calls["wt_sequence"] == {"urn:mavedb:00000001-a-1": "MKT"}
+    assert calls["wt_score"] == {"urn:mavedb:00000001-a-1": -0.5}
+    assert calls["add_relative_score"] is True
+    assert calls["relative_method"] == "difference"
+    assert calls["relative_output_col"] == "score_difference"
     assert calls["overwrite"] is True
     assert calls["acquisition"] == "snapshot"
     assert calls["snapshot_record_id"] == "20840937"
     assert calls["include_superseded"] is True
     assert logging_calls[0]["level"] == logging.DEBUG
+
+
+@pytest.mark.parametrize(
+    "fallback_arguments",
+    [
+        ["--wt-score", "missing-equals"],
+        ["--wt-score", "ASSAY_1=1.0", "--wt-score", "ASSAY_1=1.0"],
+        ["--wt-score", "ASSAY_2=1.0"],
+        ["--wt-sequence", "ASSAY_1="],
+    ],
+)
+def test_download_many_rejects_invalid_wt_mappings_before_side_effects(
+    fallback_arguments: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_datasets",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid fallback reached acquisition")
+        ),
+    )
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(
+            [
+                "download-many",
+                "--source",
+                "proteingym",
+                "--dataset-id",
+                "ASSAY_1",
+                "--output-dir",
+                str(output_dir),
+                *fallback_arguments,
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "extra"),
+    [
+        (
+            "download",
+            ["--add-relative-score", "--relative-output-col", "score_raw"],
+        ),
+        (
+            "download-many",
+            [
+                "--add-relative-score",
+                "--add-binary-label",
+                "--relative-output-col",
+                "generated",
+                "--binary-output-col",
+                "generated",
+            ],
+        ),
+    ],
+)
+def test_cli_rejects_output_collisions_before_domain_side_effects(
+    command: str,
+    extra: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forbidden = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("invalid output column reached download API")
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_dataset",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_datasets",
+        forbidden,
+    )
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(
+            [
+                command,
+                "--source",
+                "proteingym",
+                "--dataset-id",
+                "ASSAY_1",
+                "--output-dir",
+                str(output_dir),
+                *extra,
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not output_dir.exists()
 
 
 def test_download_many_partial_failure_returns_one_without_stdout(

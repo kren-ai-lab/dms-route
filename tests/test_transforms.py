@@ -5,7 +5,11 @@ import pandas as pd
 import pytest
 
 from dms_parser.constants import NEUTRAL_LABEL
-from dms_parser.exceptions import MissingWildTypeError
+from dms_parser.exceptions import (
+    InvalidDatasetError,
+    MissingWildTypeError,
+    WildTypeConflictError,
+)
 from dms_parser.transforms import (
     add_minmax,
     add_pseudo_binary_label,
@@ -31,14 +35,27 @@ def test_compute_wt_score_no_wt_raises(simple_variant_df: pd.DataFrame):
 def test_compute_wt_score_ignores_scoreless_synthetic_wt():
     df = pd.DataFrame(
         {
-            "score_raw": [np.nan, "not-numeric", 2.0, 4.0, 0.5],
+            "score_raw": [np.nan, "not-numeric", 2.0, 2.0, 0.5],
             "is_wildtype": [True, True, True, True, False],
             "is_synthetic": [True, False, False, False, False],
             "status": ["OK", "OK", "OK", "OK", "OK"],
         }
     )
 
-    assert compute_wt_score(df, "score_raw", status_col="status") == 3.0
+    assert compute_wt_score(df, "score_raw", status_col="status") == 2.0
+
+
+def test_compute_wt_score_rejects_conflicting_observed_rows():
+    df = pd.DataFrame(
+        {
+            "score_raw": [2.0, 4.0],
+            "is_wildtype": [True, True],
+            "status": ["OK", "OK"],
+        }
+    )
+
+    with pytest.raises(WildTypeConflictError, match="Conflicting WT scores"):
+        compute_wt_score(df, "score_raw", status_col="status")
 
 
 def test_compute_wt_score_rejects_only_scoreless_wt():
@@ -104,6 +121,132 @@ def test_add_wt_relative_score_invalid_method_raises(simple_variant_df: pd.DataF
         add_wt_relative_score(simple_variant_df, score_col="score_raw", method="bad")
 
 
+@pytest.mark.parametrize("wt_score", [2.0, 0.0, -2.0])
+def test_difference_accepts_any_finite_wt_score(wt_score: float):
+    df = pd.DataFrame({"score_raw": [3.0], "is_wildtype": [False]})
+
+    result = add_wt_relative_score(
+        df,
+        "score_raw",
+        method="difference",
+        output_col="difference",
+        wt_score=wt_score,
+    )
+
+    assert result["difference"].tolist() == [3.0 - wt_score]
+
+
+def test_ratio_rejects_zero_wt_score():
+    df = pd.DataFrame({"score_raw": [1.0], "is_wildtype": [False]})
+
+    with pytest.raises(InvalidDatasetError, match="non-zero WT score"):
+        add_wt_relative_score(df, "score_raw", method="ratio", wt_score=0.0)
+
+
+@pytest.mark.parametrize("method", ["log_ratio", "log2_ratio"])
+def test_log_ratios_reject_non_positive_domains(method: str):
+    df = pd.DataFrame({"score_raw": [-1.0], "is_wildtype": [False]})
+
+    with pytest.raises(InvalidDatasetError, match="strictly positive"):
+        add_wt_relative_score(df, "score_raw", method=method, wt_score=1.0)
+
+
+def test_wt_relative_transform_rejects_non_finite_source_values():
+    df = pd.DataFrame({"score_raw": [np.inf], "is_wildtype": [False]})
+
+    with pytest.raises(InvalidDatasetError, match="finite values"):
+        add_wt_relative_score(
+            df,
+            "score_raw",
+            method="difference",
+            wt_score=1.0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("method", "score", "wt_score"),
+    [
+        ("difference", np.finfo(float).max, -np.finfo(float).max),
+        ("ratio", np.finfo(float).max, np.nextafter(0.0, 1.0)),
+    ],
+)
+def test_wt_relative_transform_rejects_non_finite_results_without_assignment(
+    method: str,
+    score: float,
+    wt_score: float,
+) -> None:
+    df = pd.DataFrame({"score_raw": [score], "is_wildtype": [False]})
+
+    with pytest.raises(InvalidDatasetError, match="produced a non-finite result"):
+        add_wt_relative_score(
+            df,
+            "score_raw",
+            method=method,
+            output_col="relative",
+            wt_score=wt_score,
+        )
+
+    assert "relative" not in df.columns
+    assert df["score_raw"].iloc[0] == score
+
+
+@pytest.mark.parametrize("method", ["log_ratio", "log2_ratio"])
+def test_log_ratios_avoid_extreme_intermediate_overflow(method: str) -> None:
+    smallest = np.nextafter(0.0, 1.0)
+    largest = np.finfo(float).max
+    df = pd.DataFrame(
+        {"score_raw": [smallest, largest], "is_wildtype": [False, False]}
+    )
+
+    result = add_wt_relative_score(
+        df,
+        "score_raw",
+        method=method,
+        output_col="relative",
+        wt_score=smallest,
+    )
+
+    assert np.isfinite(result["relative"]).all()
+    assert result["relative"].iloc[0] == 0.0
+
+
+@pytest.mark.parametrize("method", ["log_ratio", "log2_ratio"])
+def test_log_ratios_reject_zero_underflow_domain(method: str) -> None:
+    df = pd.DataFrame({"score_raw": [0.0], "is_wildtype": [False]})
+
+    with pytest.raises(InvalidDatasetError, match="strictly positive"):
+        add_wt_relative_score(df, "score_raw", method=method, wt_score=1.0)
+
+
+@pytest.mark.parametrize(
+    ("operation", "kwargs"),
+    [
+        (
+            add_wt_relative_score,
+            {
+                "score_col": "score_raw",
+                "output_col": "score_raw",
+                "wt_score": 1.0,
+            },
+        ),
+        (
+            add_pseudo_binary_label,
+            {"score_col": "score_raw", "output_col": "score_raw"},
+        ),
+    ],
+)
+def test_generated_transform_cannot_overwrite_existing_column(
+    operation,
+    kwargs: dict[str, object],
+) -> None:
+    df = pd.DataFrame({"score_raw": [1.0], "is_wildtype": [False]})
+
+    with pytest.raises(InvalidDatasetError, match="cannot overwrite"):
+        operation(df, **kwargs)
+
+    assert df["score_raw"].tolist() == [1.0]
+
+
 def test_add_pseudo_binary_label_higher_is_better():
     df = pd.DataFrame({"score_log_ratio": [-0.5, -0.05, 0.0, 0.05, 0.5]})
     result = add_pseudo_binary_label(
@@ -143,6 +286,16 @@ def test_add_zscore_zero_std():
     assert list(result["z"]) == [0.0, 0.0, 0.0]
 
 
+def test_add_zscore_single_finite_value_is_zero():
+    df = pd.DataFrame({"score_raw": [7.5]})
+
+    result = add_zscore(df, "score_raw", output_col="z")
+
+    assert result.columns.tolist() == ["score_raw", "z"]
+    assert result["score_raw"].tolist() == [7.5]
+    assert result["z"].tolist() == [0.0]
+
+
 def test_add_minmax():
     df = pd.DataFrame({"score": [1.0, 2.0, 3.0]})
     result = add_minmax(df, "score", output_col="mm")
@@ -155,3 +308,14 @@ def test_add_minmax_constant_values():
     result = add_minmax(df, "score", output_col="mm")
 
     assert list(result["mm"]) == [0.0, 0.0, 0.0]
+
+
+@pytest.mark.parametrize("transform", [add_zscore, add_minmax])
+def test_non_wt_transforms_reject_non_finite_values_without_requiring_wt(
+    transform,
+):
+    valid = transform(pd.DataFrame({"score": [1.0, 2.0]}), "score")
+    assert len(valid) == 2
+
+    with pytest.raises(InvalidDatasetError, match="finite values"):
+        transform(pd.DataFrame({"score": [1.0, np.nan]}), "score")

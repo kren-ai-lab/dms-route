@@ -42,6 +42,7 @@ from dms_parser.exceptions import (
     UnknownSourceResourceError,
     UnsupportedSourceResourceError,
     UnsupportedVariantError,
+    WildTypeConflictError,
 )
 from dms_parser.fetch import fetch_to_cache
 from dms_parser.io import (
@@ -216,6 +217,7 @@ __all__ = [
     "InvalidSnapshotSelectorError",
     "InvalidDatasetError",
     "MissingWildTypeError",
+    "WildTypeConflictError",
     "InvalidVariantError",
     "InvalidHGVSVariantError",
     "UnsupportedVariantError",

@@ -441,7 +441,45 @@ artifacts. `--drop-failed` removes row-level parse failures;
 present. `--overwrite` replaces only the three deterministic files above and
 preserves unrelated files in the output directory.
 
-No score transformations are applied. Raw source columns are retained, so
+Regression scores are the primary standardized output. `score_raw` always
+retains the source-derived numeric values, while WT-relative scores and binary
+labels remain opt-in. A WT sequence is required to reconstruct variants, but it
+does not imply that a reliable WT score exists. The score is taken from an
+unambiguous observed WT row when available; no value of zero or one is assumed.
+Supply explicit fallbacks only when automatic evidence is absent:
+
+```bash
+dms-parser download \
+    --source proteingym \
+    --dataset-id BLAT_ECOLX_Jacquier_2013 \
+    --output-dir datasets/blat-difference \
+    --wt-score 1.0 \
+    --add-relative-score \
+    --relative-method difference \
+    --relative-output-col score_difference
+```
+
+Use `--wt-sequence` when trustworthy source metadata lacks a complete protein
+sequence. A fallback that conflicts with source metadata or an observed WT
+score is rejected. Ratio transforms require a finite non-zero WT score;
+logarithmic ratios additionally require every transformed score/WT ratio to be
+strictly positive. Generated score and label columns cannot replace
+`score_raw`, standardized structural fields, or existing source columns. A
+requested unsafe transform fails before publication.
+
+Synthetic WT insertion remains separate from score resolution. The generated
+row is marked `is_synthetic: true`, retains a missing `score_raw`, and is never
+presented as an experimental observation. Summary files record WT sequence and
+score provenance, observed/synthetic status, and the requested transform.
+
+A cached acquisition can be standardized again with different options by
+passing `--overwrite`; this replaces the output bundle without redownloading a
+valid cached artifact. MaveDB API score tables and normalized score-set
+metadata are cached independently per permanent URN, so both are reused during
+an offline rebuild. `--refresh` explicitly reacquires both MaveDB artifacts.
+
+Without an explicit transformation, no score transformation is applied. Raw
+source columns are retained, so
 "standardized" means that common fields are guaranteed, not that the output has
 an exclusive fixed schema. ProteinGym acquisition may download its complete
 substitutions benchmark before selecting one assay. Indels are not supported,
@@ -485,6 +523,21 @@ The cached snapshot and its selected tables are shared across the batch while
 each standardized bundle is built and published independently. Superseded
 score sets require `--include-superseded`.
 
+WT fallbacks for `download-many` are always dataset-specific. Repeat mappings
+in `DATASET_ID=VALUE` form; one scalar is never shared across the batch:
+
+```bash
+dms-parser download-many \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000097-a-1 \
+    --dataset-id urn:mavedb:00000100-a-1 \
+    --wt-score urn:mavedb:00000097-a-1=1.0 \
+    --wt-score urn:mavedb:00000100-a-1=-0.25 \
+    --add-relative-score \
+    --relative-method difference \
+    --output-dir datasets
+```
+
 Each ID receives a portable deterministic directory beneath the source. The
 directory name starts with `id-`, contains a sanitized form of the original
 ID, and ends with a short SHA-256 digest. The original ID remains in every
@@ -524,7 +577,7 @@ the two aggregate summary files. Unrelated files and old bundles whose rebuild
 fails before publication are preserved, while successful bundles remain after
 another requested dataset fails.
 
-As with single download, no score transformations are applied, original source
+As with single download, score transformations are opt-in, original source
 columns are retained, and only substitutions are supported. ProteinGym may
 load the complete substitutions benchmark once for the batch. Existing MaveDB
 WT and score/HGVS-column limitations still apply.

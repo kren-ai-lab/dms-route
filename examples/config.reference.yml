@@ -65,7 +65,8 @@ proteingym:
 
     # Generate a WT-relative score column.
     # Optional boolean. Defaults to false. Enabling it requires a valid numeric
-    # observed WT score; a scoreless synthetic WT row is not sufficient.
+    # observed WT score or dataset-level wt_score fallback; a scoreless synthetic
+    # WT row alone is not sufficient.
     add_relative_score: false
 
     # Select the WT-relative calculation.
@@ -89,8 +90,8 @@ proteingym:
 
     # Set the symmetric threshold around zero for pseudo-binary labels.
     # Optional number. Defaults to 0.1. Values strictly above +delta and below
-    # -delta are non-neutral; both boundary values are neutral. No range is
-    # enforced, so use a non-negative value for the intended neutral interval.
+    # -delta are non-neutral; both boundary values are neutral. Must be finite
+    # and non-negative.
     delta: 0.1
 
     # Define the favorable score direction for pseudo-binary labels.
@@ -118,7 +119,7 @@ proteingym:
     # Optional boolean. Defaults to true. Disabling this skips integrity checks.
     validate_output: true
 
-    # Fail when requested WT-relative transforms lack a numeric observed WT score.
+    # Fail when requested WT-relative transforms lack an observed or fallback score.
     # Optional boolean. Defaults to false. When false, the requested relative and
     # binary transformations are skipped with a warning instead.
     require_wt_for_transforms: false
@@ -129,6 +130,14 @@ proteingym:
     # Select one canonical ProteinGym DMS_id.
     # Required non-empty string. No default. Do not append ".csv".
     - dataset_id: BLAT_ECOLX_Jacquier_2013
+      # Provide a fallback WT protein sequence only when source metadata lacks it.
+      # Optional string or null. Defaults to null. A conflicting source-derived
+      # sequence is an error; the fallback never replaces trustworthy evidence.
+      wt_sequence: null
+      # Provide a fallback WT score only when no numeric observed WT row exists.
+      # Optional finite number or null. Defaults to null. A conflicting observed
+      # score is an error; no value of 0 or 1 is assumed automatically.
+      wt_score: null
       # Override source-level builder defaults for this dataset.
       # Optional mapping. Defaults to an empty mapping. Pipeline-owned input,
       # WT, dataset, protein, gene, and UniProt values cannot be overridden here.
@@ -176,7 +185,8 @@ mavedb:
 
     # Generate a WT-relative score column.
     # Optional boolean. Defaults to false. Enabling it requires a valid numeric
-    # observed WT score; a scoreless synthetic WT row is not sufficient.
+    # observed WT score or dataset-level wt_score fallback; a scoreless synthetic
+    # WT row alone is not sufficient.
     add_relative_score: false
 
     # Select the WT-relative calculation.
@@ -200,8 +210,8 @@ mavedb:
 
     # Set the symmetric threshold around zero for pseudo-binary labels.
     # Optional number. Defaults to 0.1. Values strictly above +delta and below
-    # -delta are non-neutral; both boundary values are neutral. No range is
-    # enforced, so use a non-negative value for the intended neutral interval.
+    # -delta are non-neutral; both boundary values are neutral. Must be finite
+    # and non-negative.
     delta: 0.1
 
     # Define the favorable score direction for pseudo-binary labels.
@@ -229,7 +239,7 @@ mavedb:
     # Optional boolean. Defaults to true. Disabling this skips integrity checks.
     validate_output: true
 
-    # Fail when requested WT-relative transforms lack a numeric observed WT score.
+    # Fail when requested WT-relative transforms lack an observed or fallback score.
     # Optional boolean. Defaults to false. When false, the requested relative and
     # binary transformations are skipped with a warning instead.
     require_wt_for_transforms: false
@@ -241,6 +251,14 @@ mavedb:
     # Required string. No default. Format:
     # urn:mavedb:########-(lowercase letters or 0)-(positive integer).
     - dataset_id: urn:mavedb:00000001-a-4
+      # Provide a fallback WT protein sequence only when score-set metadata lacks it.
+      # Optional string or null. Defaults to null. A conflicting metadata sequence
+      # is an error; the fallback never replaces trustworthy evidence.
+      wt_sequence: null
+      # Provide a fallback WT score only when no numeric observed p.= row exists.
+      # Optional finite number or null. Defaults to null. A conflicting observed
+      # score is an error; no normalization convention is assumed.
+      wt_score: null
       # Select the source column containing protein-level HGVS variants.
       # Optional string. When omitted, only "hgvs_pro" is auto-detected.
       # The current builder supports substitutions and complete-target identity;

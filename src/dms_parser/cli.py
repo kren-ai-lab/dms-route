@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -20,6 +21,8 @@ from dms_parser.cache import FilesystemCache
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
 from dms_parser.config import load_pipeline_config, validate_source_dataset_id
 from dms_parser.downloads import (
+    _standardization_options,
+    _validate_batch_fallbacks,
     _validate_download_acquisition,
     _validate_dataset_batch_request,
     download_and_standardize_dataset,
@@ -117,6 +120,22 @@ class _Acquisition(str, Enum):
     snapshot = "snapshot"
 
 
+class _RelativeMethod(str, Enum):
+    """Supported WT-relative score transformations."""
+
+    ratio = "ratio"
+    log_ratio = "log_ratio"
+    log2_ratio = "log2_ratio"
+    difference = "difference"
+
+
+class _BooleanValue(str, Enum):
+    """Explicit boolean values for non-flag CLI options."""
+
+    true = "true"
+    false = "false"
+
+
 def _positive_integer(value: str) -> int:
     """Parse a positive integer for a Typer option."""
     try:
@@ -189,6 +208,50 @@ def _batch_dataset_id(value: str) -> str:
     return value
 
 
+def _batch_fallback_mapping(
+    values: list[str] | None,
+    dataset_ids: list[str],
+    *,
+    field: str,
+) -> dict[str, str] | dict[str, float]:
+    """Parse repeatable DATASET_ID=VALUE fallback options."""
+    resolved: dict[str, Any] = {}
+    requested = set(dataset_ids)
+    for value in values or []:
+        if "=" not in value:
+            raise InvalidPipelineOptionError(
+                f"{field} entries must use DATASET_ID=VALUE."
+            )
+        dataset_id, supplied = value.split("=", 1)
+        if not dataset_id or not supplied:
+            raise InvalidPipelineOptionError(
+                f"{field} entries must use non-empty DATASET_ID=VALUE."
+            )
+        if dataset_id not in requested:
+            raise InvalidPipelineOptionError(
+                f"{field} contains an unrequested dataset: {dataset_id!r}."
+            )
+        if dataset_id in resolved:
+            raise InvalidPipelineOptionError(
+                f"Duplicate {field} mapping for {dataset_id!r}."
+            )
+        if field == "wt_score":
+            try:
+                parsed = float(supplied)
+            except ValueError as exc:
+                raise InvalidPipelineOptionError(
+                    f"wt_score for {dataset_id!r} must be a finite number."
+                ) from exc
+            if not math.isfinite(parsed):
+                raise InvalidPipelineOptionError(
+                    f"wt_score for {dataset_id!r} must be a finite number."
+                )
+            resolved[dataset_id] = parsed
+        else:
+            resolved[dataset_id] = supplied
+    return resolved
+
+
 def _snapshot_table_dataset_id(value: str) -> str:
     """Parse one canonical MaveDB score-set URN for snapshot extraction."""
     _batch_dataset_id(value)
@@ -253,7 +316,10 @@ def _run_command(
             "--config",
             "-c",
             metavar="CONFIG",
-            help="Path to the pipeline configuration YAML file.",
+            help=(
+                "Path to pipeline YAML, including dataset-level WT fallbacks "
+                "and opt-in score transforms."
+            ),
         ),
     ],
     only: Annotated[
@@ -503,6 +569,50 @@ def _download_command(
         bool,
         typer.Option("--add-wildtype-row"),
     ] = False,
+    wt_sequence: Annotated[
+        str | None,
+        typer.Option(
+            "--wt-sequence",
+            metavar="SEQUENCE",
+            help="Fallback WT protein sequence used only when source evidence is absent.",
+        ),
+    ] = None,
+    wt_score: Annotated[
+        float | None,
+        typer.Option(
+            "--wt-score",
+            metavar="SCORE",
+            help="Fallback WT score used only when reliable automatic evidence is absent.",
+        ),
+    ] = None,
+    add_relative_score: Annotated[
+        bool,
+        typer.Option(
+            "--add-relative-score",
+            help="Add an explicitly requested WT-relative regression score.",
+        ),
+    ] = False,
+    relative_method: Annotated[
+        _RelativeMethod,
+        typer.Option("--relative-method"),
+    ] = _RelativeMethod.log_ratio,
+    relative_output_col: Annotated[
+        str,
+        typer.Option("--relative-output-col", metavar="COLUMN"),
+    ] = "score_log_ratio",
+    add_binary_label: Annotated[
+        bool,
+        typer.Option("--add-binary-label"),
+    ] = False,
+    delta: Annotated[float, typer.Option("--delta")] = 0.1,
+    higher_is_better: Annotated[
+        _BooleanValue,
+        typer.Option("--higher-is-better"),
+    ] = _BooleanValue.true,
+    binary_output_col: Annotated[
+        str,
+        typer.Option("--binary-output-col", metavar="COLUMN"),
+    ] = "score_binary_like",
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
     log_level: Annotated[
         _LogLevel,
@@ -524,6 +634,17 @@ def _download_command(
             snapshot_record_id=snapshot_record,
             include_superseded=include_superseded,
         )
+        _standardization_options(
+            wt_sequence=wt_sequence,
+            wt_score=wt_score,
+            add_relative_score=add_relative_score,
+            relative_method=relative_method.value,
+            relative_output_col=relative_output_col,
+            add_binary_label=add_binary_label,
+            delta=delta,
+            higher_is_better=higher_is_better is _BooleanValue.true,
+            binary_output_col=binary_output_col,
+        )
     except (SourceConfigurationError, InvalidPipelineOptionError) as exc:
         _usage_error(str(exc))
 
@@ -536,6 +657,15 @@ def _download_command(
             refresh=refresh,
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
+            wt_sequence=wt_sequence,
+            wt_score=wt_score,
+            add_relative_score=add_relative_score,
+            relative_method=relative_method.value,
+            relative_output_col=relative_output_col,
+            add_binary_label=add_binary_label,
+            delta=delta,
+            higher_is_better=higher_is_better is _BooleanValue.true,
+            binary_output_col=binary_output_col,
             overwrite=overwrite,
             acquisition=acquisition_name,
             snapshot_record_id=snapshot_record,
@@ -610,6 +740,47 @@ def _download_many_command(
         bool,
         typer.Option("--add-wildtype-row"),
     ] = False,
+    wt_sequence_entries: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--wt-sequence",
+            metavar="DATASET_ID=SEQUENCE",
+            help="Repeatable per-dataset fallback WT protein sequence.",
+        ),
+    ] = None,
+    wt_score_entries: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--wt-score",
+            metavar="DATASET_ID=SCORE",
+            help="Repeatable per-dataset fallback WT score.",
+        ),
+    ] = None,
+    add_relative_score: Annotated[
+        bool,
+        typer.Option("--add-relative-score"),
+    ] = False,
+    relative_method: Annotated[
+        _RelativeMethod,
+        typer.Option("--relative-method"),
+    ] = _RelativeMethod.log_ratio,
+    relative_output_col: Annotated[
+        str,
+        typer.Option("--relative-output-col", metavar="COLUMN"),
+    ] = "score_log_ratio",
+    add_binary_label: Annotated[
+        bool,
+        typer.Option("--add-binary-label"),
+    ] = False,
+    delta: Annotated[float, typer.Option("--delta")] = 0.1,
+    higher_is_better: Annotated[
+        _BooleanValue,
+        typer.Option("--higher-is-better"),
+    ] = _BooleanValue.true,
+    binary_output_col: Annotated[
+        str,
+        typer.Option("--binary-output-col", metavar="COLUMN"),
+    ] = "score_binary_like",
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
     log_level: Annotated[
         _LogLevel,
@@ -625,6 +796,16 @@ def _download_many_command(
     acquisition_name = acquisition.value if acquisition is not None else None
     resolved_output_dir = output_dir.expanduser()
     try:
+        sequence_fallbacks = _batch_fallback_mapping(
+            wt_sequence_entries,
+            dataset_ids,
+            field="wt_sequence",
+        )
+        score_fallbacks = _batch_fallback_mapping(
+            wt_score_entries,
+            dataset_ids,
+            field="wt_score",
+        )
         _validate_download_acquisition(
             source_name,
             acquisition=acquisition_name,
@@ -639,6 +820,22 @@ def _download_many_command(
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
             overwrite=overwrite,
+        )
+        _validate_batch_fallbacks(
+            tuple(dataset_ids),
+            wt_sequence=sequence_fallbacks,
+            wt_score=score_fallbacks,
+        )
+        _standardization_options(
+            wt_sequence=None,
+            wt_score=None,
+            add_relative_score=add_relative_score,
+            relative_method=relative_method.value,
+            relative_output_col=relative_output_col,
+            add_binary_label=add_binary_label,
+            delta=delta,
+            higher_is_better=higher_is_better is _BooleanValue.true,
+            binary_output_col=binary_output_col,
         )
     except (SourceConfigurationError, InvalidPipelineOptionError) as exc:
         _usage_error(str(exc))
@@ -655,6 +852,15 @@ def _download_many_command(
             refresh=refresh,
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
+            wt_sequence=sequence_fallbacks,
+            wt_score=score_fallbacks,
+            add_relative_score=add_relative_score,
+            relative_method=relative_method.value,
+            relative_output_col=relative_output_col,
+            add_binary_label=add_binary_label,
+            delta=delta,
+            higher_is_better=higher_is_better is _BooleanValue.true,
+            binary_output_col=binary_output_col,
             overwrite=overwrite,
             acquisition=acquisition_name,
             snapshot_record_id=snapshot_record,

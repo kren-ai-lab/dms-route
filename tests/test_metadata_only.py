@@ -99,6 +99,10 @@ def test_mavedb_metadata_only_skips_dataset_acquisition(
             "dataset_id": urn,
             "target_protein": "GENE1",
             "wt_length": 3,
+            "wt_sequence_sha256": (
+                "366893d2245f5f241af2eeba0a8c19ef3bf362141a7c8504d7479ce7e7f2fb66"
+            ),
+            "wt_sequence_provenance": "mavedb_score_set_metadata",
             "raw_rows": None,
         }
     ]
@@ -152,6 +156,10 @@ def test_proteingym_metadata_only_skips_benchmark_and_processing(
             "dataset_id": "experiment-1",
             "target_protein": "P12345",
             "wt_length": 3,
+            "wt_sequence_sha256": (
+                "366893d2245f5f241af2eeba0a8c19ef3bf362141a7c8504d7479ce7e7f2fb66"
+            ),
+            "wt_sequence_provenance": "proteingym_reference_metadata",
             "raw_rows": None,
         }
     ]

@@ -6,7 +6,8 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
-from dms_parser.exceptions import SourceConfigurationError
+from dms_parser._wildtype import validate_standardization_options
+from dms_parser.exceptions import InvalidPipelineOptionError, SourceConfigurationError
 from dms_parser.sources.proteingym_resources import (
     ProteinGymResource,
     get_proteingym_resource,
@@ -197,6 +198,11 @@ def _validate_dataset_entries(
         raise SourceConfigurationError(
             f"The {source!r} 'default_build_kwargs' value must be a mapping."
         )
+    _reject_pipeline_owned_wt_kwargs(
+        default_build_kwargs,
+        source=source,
+        location="default_build_kwargs",
+    )
 
     seen: set[str] = set()
     validated: list[dict[str, Any]] = []
@@ -233,6 +239,50 @@ def _validate_dataset_entries(
             raise SourceConfigurationError(
                 f"The {source!r} build_kwargs at index {index} must be a mapping."
             )
+        _reject_pipeline_owned_wt_kwargs(
+            build_kwargs,
+            source=source,
+            location=f"build_kwargs at index {index}",
+        )
+        effective = {**default_build_kwargs, **build_kwargs}
+        try:
+            validate_standardization_options(
+                wt_sequence=entry.get("wt_sequence"),
+                wt_score=entry.get("wt_score"),
+                add_relative_score=effective.get("add_relative_score", False),
+                relative_method=effective.get("relative_method", "log_ratio"),
+                relative_output_col=effective.get(
+                    "relative_output_col",
+                    "score_log_ratio",
+                ),
+                add_binary_label=effective.get("add_binary_label", False),
+                delta=effective.get("delta", 0.1),
+                higher_is_better=effective.get("higher_is_better", True),
+                binary_output_col=effective.get(
+                    "binary_output_col",
+                    "score_binary_like",
+                ),
+            )
+        except InvalidPipelineOptionError as exc:
+            raise SourceConfigurationError(
+                f"Invalid {source} standardization options at index {index}: {exc}"
+            ) from exc
         seen.add(dataset_id)
         validated.append(cast(dict[str, Any], entry))
     return validated
+
+
+def _reject_pipeline_owned_wt_kwargs(
+    build_kwargs: dict[str, Any],
+    *,
+    source: str,
+    location: str,
+) -> None:
+    """Keep WT fallback values in the dataset entry's single canonical location."""
+    present = sorted({"wt_sequence", "wt_score"}.intersection(build_kwargs))
+    if present:
+        joined = ", ".join(present)
+        raise SourceConfigurationError(
+            f"The {source!r} {location} contains pipeline-owned WT keys: "
+            f"{joined}; place them beside dataset_id instead."
+        )

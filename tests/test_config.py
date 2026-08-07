@@ -228,6 +228,10 @@ def test_reference_config_preserves_source_contracts_and_transform_defaults() ->
     assert mavedb["datasets"][0]["dataset_id"] == "urn:mavedb:00000001-a-4"
     assert mavedb["datasets"][0]["hgvs_col"] == "hgvs_pro"
     assert mavedb["datasets"][0]["score_col"] == "score"
+    assert proteingym["datasets"][0]["wt_sequence"] is None
+    assert proteingym["datasets"][0]["wt_score"] is None
+    assert mavedb["datasets"][0]["wt_sequence"] is None
+    assert mavedb["datasets"][0]["wt_score"] is None
 
     for source in (proteingym, mavedb):
         defaults = source["default_build_kwargs"]
@@ -235,6 +239,59 @@ def test_reference_config_preserves_source_contracts_and_transform_defaults() ->
         assert defaults["add_binary_label"] is False
         assert defaults["add_wildtype_row"] is False
         assert defaults["drop_failed"] is False
+
+
+@pytest.mark.parametrize(
+    ("entry_update", "message"),
+    [
+        ({"wt_sequence": "NOT-A-PROTEIN"}, "WT sequence"),
+        ({"wt_score": float("inf")}, "finite number"),
+        (
+            {"build_kwargs": {"add_binary_label": True}},
+            "requires add_relative_score",
+        ),
+        (
+            {
+                "build_kwargs": {
+                    "add_relative_score": True,
+                    "relative_output_col": "score_raw",
+                }
+            },
+            "protected standardized column",
+        ),
+        (
+            {
+                "build_kwargs": {
+                    "add_relative_score": True,
+                    "add_binary_label": True,
+                    "relative_output_col": "generated",
+                    "binary_output_col": "generated",
+                }
+            },
+            "must be different",
+        ),
+    ],
+)
+def test_wt_standardization_config_is_validated_before_io(
+    entry_update: dict[str, object],
+    message: str,
+    tmp_path: Path,
+) -> None:
+    config = _valid_config(tmp_path)
+    config["proteingym"]["datasets"][0].update(entry_update)
+
+    with pytest.raises(SourceConfigurationError, match=message):
+        validate_pipeline_config(config)
+
+
+def test_wt_fallbacks_have_one_canonical_yaml_location(tmp_path: Path) -> None:
+    config = _valid_config(tmp_path)
+    config["proteingym"]["datasets"][0]["build_kwargs"] = {
+        "wt_score": 1.0
+    }
+
+    with pytest.raises(SourceConfigurationError, match="beside dataset_id"):
+        validate_pipeline_config(config)
 
 
 def test_installed_package_sources_do_not_import_examples() -> None:

@@ -8,6 +8,7 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 import requests
@@ -33,7 +34,9 @@ from dms_parser.exceptions import (
     DownloadError,
     InvalidDatasetError,
     InvalidPipelineOptionError,
+    MissingWildTypeError,
     SourceConfigurationError,
+    WildTypeConflictError,
 )
 from dms_parser.sources.mavedb_snapshots import MAVEDB_ZENODO_CONCEPT_DOI
 from dms_parser.sources.proteingym_catalog import (
@@ -144,6 +147,11 @@ def test_download_api_is_public() -> None:
         assert parameters["acquisition"].default is None
         assert parameters["snapshot_record_id"].default is None
         assert parameters["include_superseded"].default is False
+        assert parameters["add_relative_score"].default is False
+        assert parameters["relative_method"].default == "log_ratio"
+        assert parameters["add_binary_label"].default is False
+        assert parameters["wt_sequence"].default is None
+        assert parameters["wt_score"].default is None
 
 
 def test_download_collision_preflight_precedes_acquisition_and_output(
@@ -175,6 +183,360 @@ def test_download_collision_preflight_precedes_acquisition_and_output(
     assert existing.read_text(encoding="utf-8") == "existing"
     assert not cache.root.exists()
     assert list(output_dir.iterdir()) == [existing]
+
+
+def test_batch_wt_mapping_validation_precedes_cache_and_output(tmp_path: Path) -> None:
+    cache = FilesystemCache(tmp_path / "cache")
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(InvalidPipelineOptionError, match="unrequested"):
+        download_and_standardize_datasets(
+            "proteingym",
+            ["ASSAY_1"],
+            output_dir=output_dir,
+            cache=cache,
+            wt_score={"ASSAY_2": 1.0},
+        )
+
+    assert not cache.root.exists()
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("batch", "options"),
+    [
+        (False, {"add_relative_score": True, "relative_output_col": "score_raw"}),
+        (
+            False,
+            {
+                "add_relative_score": True,
+                "relative_output_col": "parsed_variant",
+            },
+        ),
+        (
+            False,
+            {
+                "add_relative_score": True,
+                "add_binary_label": True,
+                "binary_output_col": "status",
+            },
+        ),
+        (
+            False,
+            {
+                "add_relative_score": True,
+                "add_binary_label": True,
+                "binary_output_col": "parsed_variant",
+            },
+        ),
+        (
+            True,
+            {
+                "add_relative_score": True,
+                "add_binary_label": True,
+                "relative_output_col": "generated",
+                "binary_output_col": "generated",
+            },
+        ),
+    ],
+)
+def test_output_collision_validation_precedes_acquisition_cache_and_output(
+    batch: bool,
+    options: dict[str, object],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid output name reached acquisition")
+        ),
+    )
+    cache = FilesystemCache(tmp_path / "cache")
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(InvalidPipelineOptionError):
+        if batch:
+            download_and_standardize_datasets(
+                "proteingym",
+                ["ASSAY_1"],
+                output_dir=output_dir,
+                cache=cache,
+                **options,
+            )
+        else:
+            download_and_standardize_dataset(
+                "proteingym",
+                "ASSAY_1",
+                output_dir=output_dir,
+                cache=cache,
+                **options,
+            )
+
+    assert not cache.root.exists()
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"add_relative_score": True, "relative_output_col": "parsed_variant"},
+        {
+            "add_relative_score": True,
+            "add_binary_label": True,
+            "binary_output_col": "parsed_variant",
+        },
+    ],
+)
+def test_parsed_variant_collision_precedes_snapshot_extraction(
+    options: dict[str, object],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    acquisition_calls = 0
+
+    def forbidden_acquisition(*args: Any, **kwargs: Any) -> None:
+        nonlocal acquisition_calls
+        acquisition_calls += 1
+        raise AssertionError("invalid output name reached snapshot extraction")
+
+    monkeypatch.setattr(
+        downloads_module,
+        "acquire_cached_mavedb_snapshot_datasets",
+        forbidden_acquisition,
+    )
+    cache = FilesystemCache(tmp_path / "cache")
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(InvalidPipelineOptionError, match="parsed_variant"):
+        download_and_standardize_dataset(
+            "mavedb",
+            "urn:mavedb:00000001-a-1",
+            output_dir=output_dir,
+            cache=cache,
+            acquisition="snapshot",
+            snapshot_record_id="20840937",
+            **options,
+        )
+
+    assert acquisition_calls == 0
+    assert not cache.root.exists()
+    assert not output_dir.exists()
+
+
+def test_proteingym_manual_sequence_cannot_replace_reference_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: DatasetRecord(
+            source="proteingym",
+            dataset_id="ASSAY_1",
+            title=None,
+            target_id=None,
+            variant_type="substitutions",
+            n_variants=1,
+            raw_metadata={"DMS_id": "ASSAY_1", "target_seq": "MKT"},
+        ),
+    )
+
+    with pytest.raises(WildTypeConflictError, match="fallback conflicts"):
+        download_and_standardize_dataset(
+            "proteingym",
+            "ASSAY_1",
+            output_dir=tmp_path / "output",
+            cache=FilesystemCache(tmp_path / "cache"),
+            wt_sequence="AAA",
+        )
+
+    assert not (tmp_path / "output").exists()
+    assert not (tmp_path / "cache").exists()
+
+
+def test_invalid_proteingym_metadata_sequence_is_invalid_dataset_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: DatasetRecord(
+            source="proteingym",
+            dataset_id="ASSAY_1",
+            title=None,
+            target_id=None,
+            variant_type="substitutions",
+            n_variants=1,
+            raw_metadata={
+                "DMS_id": "ASSAY_1",
+                "target_seq": "NOT-A-PROTEIN",
+            },
+        ),
+    )
+
+    with pytest.raises(InvalidDatasetError, match="proteingym_reference_metadata"):
+        download_and_standardize_dataset(
+            "proteingym",
+            "ASSAY_1",
+            output_dir=tmp_path / "output",
+            cache=FilesystemCache(tmp_path / "cache"),
+        )
+
+    assert not (tmp_path / "cache").exists()
+    assert not (tmp_path / "output").exists()
+
+
+def test_invalid_user_sequence_fallback_is_invalid_option_before_acquisition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid fallback reached acquisition")
+        ),
+    )
+
+    with pytest.raises(InvalidPipelineOptionError, match="user_fallback"):
+        download_and_standardize_dataset(
+            "proteingym",
+            "ASSAY_1",
+            output_dir=tmp_path / "output",
+            cache=FilesystemCache(tmp_path / "cache"),
+            wt_sequence="NOT-A-PROTEIN",
+        )
+
+    assert not (tmp_path / "cache").exists()
+    assert not (tmp_path / "output").exists()
+
+
+def test_conflicting_mavedb_metadata_sequences_publish_no_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    acquired = downloads_module._MaveDBDownloadInput(
+        scores_path=tmp_path / "unused.csv",
+        metadata={
+            "targetSequence": {"sequence": "MKT"},
+            "nested": {"targetSequence": {"sequence": "AAA"}},
+        },
+        provenance={},
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "_acquire_mavedb_api_dataset",
+        lambda *args, **kwargs: acquired,
+    )
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(WildTypeConflictError, match="Conflicting WT sequences"):
+        download_and_standardize_dataset(
+            "mavedb",
+            "urn:mavedb:00000001-a-1",
+            output_dir=output_dir,
+            cache=FilesystemCache(tmp_path / "cache"),
+        )
+
+    assert not output_dir.exists()
+
+
+def test_missing_wt_score_for_requested_transform_publishes_no_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: DatasetRecord(
+            source="proteingym",
+            dataset_id="ASSAY_1",
+            title=None,
+            target_id=None,
+            variant_type="substitutions",
+            n_variants=1,
+            raw_metadata={"DMS_id": "ASSAY_1", "target_seq": "MKT"},
+        ),
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "_acquire_proteingym_benchmark",
+        lambda **kwargs: pd.DataFrame(
+            {"DMS_id": ["ASSAY_1"], "mutant": ["M1A"], "DMS_score": [0.5]}
+        ),
+    )
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(MissingWildTypeError, match="provide wt_score"):
+        download_and_standardize_dataset(
+            "proteingym",
+            "ASSAY_1",
+            output_dir=output_dir,
+            cache=FilesystemCache(tmp_path / "cache"),
+            add_relative_score=True,
+            relative_method="difference",
+        )
+
+    assert not output_dir.exists()
+
+
+def test_download_numerical_transform_error_includes_dataset_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "OVERFLOW_ASSAY"
+    benchmark_table = pd.DataFrame(
+        {
+            "DMS_id": [dataset_id],
+            "mutant": ["M1A"],
+            "DMS_score": [np.finfo(float).max],
+        }
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: DatasetRecord(
+            source="proteingym",
+            dataset_id=dataset_id,
+            title=None,
+            target_id=None,
+            variant_type="substitutions",
+            n_variants=1,
+            raw_metadata={"DMS_id": dataset_id, "target_seq": "MKT"},
+        ),
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "_acquire_proteingym_benchmark",
+        lambda **kwargs: benchmark_table,
+    )
+    output_dir = tmp_path / "output"
+    cache = FilesystemCache(tmp_path / "cache")
+
+    with pytest.raises(InvalidDatasetError) as exc_info:
+        download_and_standardize_dataset(
+            "proteingym",
+            dataset_id,
+            output_dir=output_dir,
+            cache=cache,
+            wt_score=-np.finfo(float).max,
+            add_relative_score=True,
+            relative_method="difference",
+            relative_output_col="score_difference",
+        )
+
+    message = str(exc_info.value)
+    assert dataset_id in message
+    assert "difference" in message
+    assert "produced a non-finite result" in message
+    assert isinstance(exc_info.value.__cause__, InvalidDatasetError)
+    assert "score_difference" not in benchmark_table.columns
+    assert benchmark_table["DMS_score"].iloc[0] == np.finfo(float).max
+    assert not output_dir.exists()
+    assert not cache.root.exists()
 
 
 @pytest.mark.parametrize(
@@ -356,6 +718,13 @@ def test_proteingym_download_uses_shared_cached_benchmark_and_builds_bundle(
     assert second.summary["discarded_rows"] == 0
     assert second.summary["wildtype_rows"] == 1
     assert second.summary["synthetic_wildtype_rows"] == 1
+    assert second.summary["wt_sequence_provenance"] == (
+        "proteingym_reference_metadata"
+    )
+    assert second.summary["wt_score"] is None
+    assert second.summary["wt_score_provenance"] is None
+    assert second.summary["observed_wildtype_row"] is False
+    assert second.summary["synthetic_wildtype_inserted"] is True
     assert second.summary["output_file"] == str(second.dataset_path)
     assert list(second.summary) == [
         "source",
@@ -364,6 +733,15 @@ def test_proteingym_download_uses_shared_cached_benchmark_and_builds_bundle(
         "dataset_id",
         "target_protein",
         "wt_length",
+        "wt_sequence_sha256",
+        "wt_sequence_provenance",
+        "wt_score",
+        "wt_score_provenance",
+        "observed_wildtype_row",
+        "synthetic_wildtype_inserted",
+        "requested_transformation",
+        "transformed_output_column",
+        "wt_score_unavailable_reason",
         "raw_rows",
         "validated_rows",
         "discarded_rows",
@@ -387,6 +765,25 @@ def test_proteingym_download_uses_shared_cached_benchmark_and_builds_bundle(
         assert content.endswith(b"\n")
         assert not content.endswith(b"\n\n")
         assert b"\r\n" not in content
+
+    rebuilt = download_and_standardize_dataset(
+        "proteingym",
+        "ASSAY_2",
+        output_dir=tmp_path / "second",
+        cache=cache,
+        wt_score=1.0,
+        add_relative_score=True,
+        relative_method="difference",
+        relative_output_col="score_difference",
+        overwrite=True,
+    )
+    rebuilt_table = pd.read_csv(rebuilt.dataset_path)
+    assert rebuilt_table["score_raw"].tolist() == [0.75]
+    assert rebuilt_table["score_difference"].tolist() == [-0.25]
+    assert rebuilt.summary["wt_score"] == 1.0
+    assert rebuilt.summary["wt_score_provenance"] == "user_fallback"
+    assert rebuilt.summary["requested_transformation"] == "difference"
+    assert download_calls == [resource.metadata_url, resource.data_url]
 
     refreshed = download_and_standardize_dataset(
         "proteingym",
@@ -422,11 +819,14 @@ def test_mavedb_download_caches_scores_and_preserves_builder_behavior(
             "targetSequence": {"sequence": "MKT"},
         },
     )
-    monkeypatch.setattr(
-        downloads_module,
-        "get_dataset_metadata",
-        lambda source, requested_id: metadata,
-    )
+    metadata_calls: list[str] = []
+
+    def offline_metadata(source: str, requested_id: str) -> DatasetRecord:
+        assert source == "mavedb"
+        metadata_calls.append(requested_id)
+        return metadata
+
+    monkeypatch.setattr(downloads_module, "get_dataset_metadata", offline_metadata)
     download_calls: list[str] = []
 
     def offline_download(
@@ -463,7 +863,30 @@ def test_mavedb_download_caches_scores_and_preserves_builder_behavior(
     )
 
     assert len(download_calls) == 1
+    assert metadata_calls == [dataset_id]
     assert cache.exists("mavedb", dataset_id)
+    assert cache.exists(downloads_module._MAVEDB_METADATA_CACHE_SOURCE, dataset_id)
+    metadata_manifest = cache.load_manifest(
+        downloads_module._MAVEDB_METADATA_CACHE_SOURCE,
+        dataset_id,
+    )
+    assert metadata_manifest.original_url == (
+        f"{downloads_module.MAVEDB_API_URL.rstrip('/')}/score-sets/{dataset_id}"
+    )
+    cached_metadata_path = cache.resolve(
+        downloads_module._MAVEDB_METADATA_CACHE_SOURCE,
+        dataset_id,
+    )
+    assert cached_metadata_path is not None
+    assert cached_metadata_path.read_text(encoding="utf-8") == (
+        json.dumps(
+            metadata.raw_metadata,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    )
     first_table = pd.read_csv(first.dataset_path)
     assert first_table["score_raw"].tolist() == [0.75, -2.5]
     assert first_table["is_synthetic"].tolist() == [False, False]
@@ -480,6 +903,21 @@ def test_mavedb_download_caches_scores_and_preserves_builder_behavior(
     ]
     assert "G\u00c9NE" in second.summary_json_path.read_text(encoding="utf-8")
 
+    rebuilt = download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "second",
+        cache=cache,
+        wt_score=1.0,
+        add_relative_score=True,
+        relative_method="difference",
+        relative_output_col="score_difference",
+        overwrite=True,
+    )
+    rebuilt_table = pd.read_csv(rebuilt.dataset_path)
+    assert rebuilt_table["score_raw"].tolist() == [0.75, -2.5]
+    assert rebuilt_table["score_difference"].tolist() == [-0.25, -3.5]
+
     download_and_standardize_dataset(
         "mavedb",
         dataset_id,
@@ -488,6 +926,296 @@ def test_mavedb_download_caches_scores_and_preserves_builder_behavior(
         refresh=True,
     )
     assert len(download_calls) == 2
+    assert metadata_calls == [dataset_id, dataset_id]
+
+
+def test_failed_mavedb_metadata_refresh_preserves_cached_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-1"
+    metadata = DatasetRecord(
+        source="mavedb",
+        dataset_id=dataset_id,
+        title="Cached assay",
+        target_id="GENE",
+        variant_type=None,
+        n_variants=1,
+        raw_metadata={
+            "urn": dataset_id,
+            "targetGenes": [{"name": "GENE"}],
+            "targetSequence": {"sequence": "MKT"},
+        },
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: metadata,
+    )
+
+    def offline_download(url: str, output_path: str | Path, **kwargs: Any) -> Path:
+        path = Path(output_path)
+        path.write_text("hgvs_pro,score\np.Met1Ala,0.5\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(fetch_module, "download_file", offline_download)
+    cache = FilesystemCache(tmp_path / "cache")
+    download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "first",
+        cache=cache,
+    )
+    scores_path = cache.resolve("mavedb", dataset_id)
+    metadata_path = cache.resolve(
+        downloads_module._MAVEDB_METADATA_CACHE_SOURCE,
+        dataset_id,
+    )
+    assert scores_path is not None and metadata_path is not None
+    original_scores = scores_path.read_bytes()
+    original_metadata = metadata_path.read_bytes()
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            DownloadError("metadata refresh failed")
+        ),
+    )
+
+    with pytest.raises(DownloadError, match="metadata refresh failed"):
+        download_and_standardize_dataset(
+            "mavedb",
+            dataset_id,
+            output_dir=tmp_path / "failed-refresh",
+            cache=cache,
+            refresh=True,
+        )
+
+    preserved_scores_path = cache.resolve("mavedb", dataset_id)
+    preserved_metadata_path = cache.resolve(
+        downloads_module._MAVEDB_METADATA_CACHE_SOURCE,
+        dataset_id,
+    )
+    assert preserved_scores_path is not None
+    assert preserved_metadata_path is not None
+    assert preserved_scores_path.read_bytes() == original_scores
+    assert preserved_metadata_path.read_bytes() == original_metadata
+    assert not (tmp_path / "failed-refresh").exists()
+
+
+@pytest.mark.parametrize(
+    ("invalid_kind", "expected_error", "message"),
+    [
+        ("malformed", InvalidDatasetError, "cannot be serialized"),
+        ("non-object", InvalidDatasetError, "must be a JSON object"),
+        ("mismatched-urn", InvalidDatasetError, "does not match"),
+        ("invalid-wt", InvalidDatasetError, "mavedb_score_set_metadata"),
+        ("conflicting-wt", WildTypeConflictError, "Conflicting WT sequences"),
+    ],
+)
+def test_invalid_mavedb_metadata_refresh_preserves_valid_cached_bytes(
+    invalid_kind: str,
+    expected_error: type[Exception],
+    message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-1"
+    valid_metadata = {
+        "urn": dataset_id,
+        "targetGenes": [{"name": "GENE"}],
+        "targetSequence": {"sequence": "MKT"},
+    }
+
+    def record(raw_metadata: Any) -> DatasetRecord:
+        return DatasetRecord(
+            source="mavedb",
+            dataset_id=dataset_id,
+            title="Cached assay",
+            target_id="GENE",
+            variant_type=None,
+            n_variants=1,
+            raw_metadata=raw_metadata,
+        )
+
+    current_metadata = record(valid_metadata)
+    metadata_calls = 0
+
+    def offline_metadata(*args: Any, **kwargs: Any) -> DatasetRecord:
+        nonlocal metadata_calls
+        metadata_calls += 1
+        return current_metadata
+
+    download_calls = 0
+
+    def offline_download(url: str, output_path: str | Path, **kwargs: Any) -> Path:
+        nonlocal download_calls
+        download_calls += 1
+        path = Path(output_path)
+        path.write_text("hgvs_pro,score\np.Met1Ala,0.5\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(downloads_module, "get_dataset_metadata", offline_metadata)
+    monkeypatch.setattr(fetch_module, "download_file", offline_download)
+    cache = FilesystemCache(tmp_path / "cache")
+    download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "first",
+        cache=cache,
+    )
+    metadata_path = cache.resolve(
+        downloads_module._MAVEDB_METADATA_CACHE_SOURCE,
+        dataset_id,
+    )
+    assert metadata_path is not None
+    original_metadata = metadata_path.read_bytes()
+    real_normalize = downloads_module.normalize_raw_metadata
+
+    if invalid_kind == "malformed":
+        invalid_metadata: Any = {
+            **valid_metadata,
+            "unserializable": object(),
+        }
+    elif invalid_kind == "non-object":
+        invalid_metadata = valid_metadata
+        monkeypatch.setattr(
+            downloads_module,
+            "normalize_raw_metadata",
+            lambda values: [values],
+        )
+    elif invalid_kind == "mismatched-urn":
+        invalid_metadata = {**valid_metadata, "urn": f"{dataset_id}-other"}
+    elif invalid_kind == "invalid-wt":
+        invalid_metadata = {
+            **valid_metadata,
+            "targetSequence": {"sequence": "NOT-A-PROTEIN"},
+        }
+    else:
+        invalid_metadata = {
+            **valid_metadata,
+            "nested": {"targetSequence": {"sequence": "AAA"}},
+        }
+    current_metadata = record(invalid_metadata)
+
+    with pytest.raises(expected_error, match=message):
+        download_and_standardize_dataset(
+            "mavedb",
+            dataset_id,
+            output_dir=tmp_path / "failed-refresh",
+            cache=cache,
+            refresh=True,
+        )
+
+    preserved_path = cache.resolve(
+        downloads_module._MAVEDB_METADATA_CACHE_SOURCE,
+        dataset_id,
+    )
+    assert preserved_path is not None
+    assert preserved_path.read_bytes() == original_metadata
+    assert not (tmp_path / "failed-refresh").exists()
+    assert metadata_calls == 2
+    assert download_calls == 1
+
+    monkeypatch.setattr(
+        downloads_module,
+        "normalize_raw_metadata",
+        real_normalize,
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cache reconstruction contacted MaveDB metadata")
+        ),
+    )
+    monkeypatch.setattr(
+        fetch_module,
+        "download_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cache reconstruction downloaded MaveDB scores")
+        ),
+    )
+    rebuilt = download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "cached",
+        cache=cache,
+    )
+    assert rebuilt.summary["status"] == "OK"
+    assert preserved_path.read_bytes() == original_metadata
+
+
+def test_invalid_mavedb_api_metadata_sequence_is_invalid_dataset_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-1"
+    metadata = DatasetRecord(
+        source="mavedb",
+        dataset_id=dataset_id,
+        title=None,
+        target_id=None,
+        variant_type=None,
+        n_variants=1,
+        raw_metadata={
+            "urn": dataset_id,
+            "targetSequence": {"sequence": "NOT-A-PROTEIN"},
+        },
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "get_dataset_metadata",
+        lambda *args, **kwargs: metadata,
+    )
+
+    def offline_download(url: str, output_path: str | Path, **kwargs: Any) -> Path:
+        path = Path(output_path)
+        path.write_text("hgvs_pro,score\np.Met1Ala,0.5\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(fetch_module, "download_file", offline_download)
+
+    with pytest.raises(InvalidDatasetError, match="mavedb_score_set_metadata"):
+        download_and_standardize_dataset(
+            "mavedb",
+            dataset_id,
+            output_dir=tmp_path / "output",
+            cache=FilesystemCache(tmp_path / "cache"),
+        )
+
+    assert not (tmp_path / "output").exists()
+
+
+def test_invalid_mavedb_snapshot_sequence_is_invalid_without_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-1"
+    metadata = _snapshot_score_set(dataset_id)
+    metadata["targetSequence"] = {"sequence": "NOT-A-PROTEIN"}
+    cache = _write_cached_snapshot(
+        tmp_path,
+        [metadata],
+        current_ids=[dataset_id],
+    )
+    forbidden = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("snapshot validation contacted MaveDB API")
+    )
+    monkeypatch.setattr(downloads_module, "get_dataset_metadata", forbidden)
+    monkeypatch.setattr(downloads_module, "download_mavedb_dataset", forbidden)
+
+    with pytest.raises(InvalidDatasetError, match="mavedb_score_set_metadata"):
+        download_and_standardize_dataset(
+            "mavedb",
+            dataset_id,
+            output_dir=tmp_path / "output",
+            cache=cache,
+            acquisition="snapshot",
+            snapshot_record_id="20840937",
+        )
+
+    assert not (tmp_path / "output").exists()
 
 
 def test_snapshot_single_uses_offline_tables_common_builder_and_provenance(
@@ -602,6 +1330,13 @@ def test_snapshot_single_uses_offline_tables_common_builder_and_provenance(
         pd.read_csv(api.dataset_path),
         check_dtype=True,
     )
+    for result in (first, api):
+        assert result.summary["wt_score"] == 1.0
+        assert result.summary["wt_score_provenance"] == "observed_wildtype_row"
+        assert result.summary["wt_sequence_provenance"] == (
+            "mavedb_score_set_metadata"
+        )
+        assert result.summary["observed_wildtype_row"] is True
 
 
 def _batch_metadata_record(dataset_id: str) -> DatasetRecord:
@@ -817,6 +1552,10 @@ def test_proteingym_batch_acquires_and_loads_shared_artifacts_once(
         cache=cache,
         refresh=True,
         add_wildtype_row=True,
+        wt_score={"ASSAY_2": 0.25},
+        add_relative_score=True,
+        relative_method="difference",
+        relative_output_col="score_difference",
     )
 
     assert download_calls == [resource.metadata_url, resource.data_url]
@@ -839,6 +1578,7 @@ def test_proteingym_batch_acquires_and_loads_shared_artifacts_once(
     assert result.exit_code == 1
     assay_two = pd.read_csv(result.entries[1].result.dataset_path)  # type: ignore[union-attr]
     assert assay_two["score_raw"].iloc[1] == 0.75
+    assert assay_two["score_difference"].iloc[1] == 0.5
     assert assay_two["is_synthetic"].tolist() == [True, False]
     assert assay_two["source_note"].iloc[1] == "caf\u00c3\u00a9"
     records = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
@@ -848,6 +1588,8 @@ def test_proteingym_batch_acquires_and_loads_shared_artifacts_once(
         "SUCCESS",
     ]
     assert records[1]["dataset_path"].startswith("proteingym/id-")
+    assert records[1]["wt_score"] == 0.25
+    assert records[1]["wt_score_provenance"] == "user_fallback"
     assert "\\" not in records[1]["dataset_path"]
 
 
@@ -916,8 +1658,11 @@ def test_mavedb_batch_reuses_cache_and_refreshes_each_unique_urn_once(
         "urn:mavedb:00000002-a-1",
     )
 
+    metadata_calls: list[str] = []
+
     def metadata(source: str, dataset_id: str) -> DatasetRecord:
         assert source == "mavedb"
+        metadata_calls.append(dataset_id)
         return DatasetRecord(
             source="mavedb",
             dataset_id=dataset_id,
@@ -968,7 +1713,21 @@ def test_mavedb_batch_reuses_cache_and_refreshes_each_unique_urn_once(
 
     assert first.success_count == second.success_count == refreshed.success_count == 2
     assert len(download_calls) == 4
+    assert metadata_calls == [*dataset_ids, *dataset_ids]
     assert all(cache.exists("mavedb", dataset_id) for dataset_id in dataset_ids)
+    assert all(
+        cache.exists(downloads_module._MAVEDB_METADATA_CACHE_SOURCE, dataset_id)
+        for dataset_id in dataset_ids
+    )
+    assert len(
+        {
+            cache.entry_path(
+                downloads_module._MAVEDB_METADATA_CACHE_SOURCE,
+                dataset_id,
+            )
+            for dataset_id in dataset_ids
+        }
+    ) == 2
     first_table = pd.read_csv(first.entries[0].result.dataset_path)  # type: ignore[union-attr]
     assert first_table["is_synthetic"].tolist() == [True, False]
 

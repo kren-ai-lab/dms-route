@@ -3,10 +3,19 @@ from __future__ import annotations
 import warnings
 from inspect import signature
 
+import numpy as np
 import pandas as pd
 import pytest
 
+import dms_parser.builders as builders_module
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
+from dms_parser.constants import NEUTRAL_LABEL
+from dms_parser.exceptions import (
+    InvalidDatasetError,
+    InvalidPipelineOptionError,
+    MissingWildTypeError,
+    WildTypeConflictError,
+)
 
 
 def _build_source_dataset(
@@ -54,6 +63,115 @@ def test_builder_score_transform_defaults_are_disabled(builder):
     assert parameters["add_relative_score"].default is False
     assert parameters["add_binary_label"].default is False
     assert parameters["add_wildtype_row"].default is False
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"add_relative_score": True, "relative_output_col": "score_raw"},
+        {
+            "add_relative_score": True,
+            "add_binary_label": True,
+            "binary_output_col": "score_raw",
+        },
+        {
+            "add_relative_score": True,
+            "add_binary_label": True,
+            "relative_output_col": "generated",
+            "binary_output_col": "generated",
+        },
+        {"add_relative_score": True, "relative_output_col": "status"},
+    ],
+)
+def test_builder_rejects_static_output_collisions_before_input_io(
+    options: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        builders_module,
+        "read_table",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid output column reached input I/O")
+        ),
+    )
+
+    with pytest.raises(InvalidPipelineOptionError):
+        build_proteingym_dataset(
+            input_path="unused.csv",
+            score_col="DMS_score",
+            wt_sequence="MKT",
+            **options,
+        )
+
+
+def test_builder_rejects_collision_with_acquired_source_column(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    path = tmp_path / "proteingym.csv"
+    pd.DataFrame(
+        {
+            "mutant": ["WT", "M1A"],
+            "DMS_score": [1.0, 0.5],
+            "custom_relative": [9.0, 8.0],
+        }
+    ).to_csv(path, index=False)
+
+    with pytest.raises(InvalidDatasetError, match="cannot overwrite"):
+        build_proteingym_dataset(
+            input_path=path,
+            score_col="DMS_score",
+            variant_col="mutant",
+            wt_sequence=wt_sequence,
+            add_relative_score=True,
+            relative_method="difference",
+            relative_output_col="custom_relative",
+        )
+
+
+def test_valid_custom_output_columns_preserve_score_raw(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        "proteingym",
+        ["WT", "M1A"],
+        [1.0, 0.5],
+        wt_sequence=wt_sequence,
+        add_relative_score=True,
+        relative_method="difference",
+        relative_output_col="custom_relative",
+        add_binary_label=True,
+        binary_output_col="custom_label",
+    )
+
+    assert result["score_raw"].tolist() == [1.0, 0.5]
+    assert result["custom_relative"].tolist() == [0.0, -0.5]
+    assert result["custom_label"].tolist() == [NEUTRAL_LABEL, 0]
+
+
+def test_non_finite_transform_result_reports_method_and_dataset(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    with pytest.raises(
+        InvalidDatasetError,
+        match="Transformation 'difference' for 'overflow-assay' failed",
+    ):
+        _build_source_dataset(
+            tmp_path,
+            "proteingym",
+            ["M1A"],
+            [np.finfo(float).max],
+            wt_sequence=wt_sequence,
+            wt_score=-np.finfo(float).max,
+            dataset_id="overflow-assay",
+            add_relative_score=True,
+            relative_method="difference",
+            relative_output_col="relative",
+            require_wt_for_transforms=True,
+        )
 
 
 def test_dataset_without_wt_keeps_source_rows_by_default(
@@ -226,7 +344,7 @@ def test_scoreless_synthetic_wt_can_be_required_for_transform(
     tmp_path,
     wt_sequence: str,
 ) -> None:
-    with pytest.raises(ValueError, match="no valid numeric WT score"):
+    with pytest.raises(MissingWildTypeError, match="provide wt_score"):
         _build_source_dataset(
             tmp_path,
             "proteingym",
@@ -237,6 +355,71 @@ def test_scoreless_synthetic_wt_can_be_required_for_transform(
             add_relative_score=True,
             require_wt_for_transforms=True,
         )
+
+
+def test_manual_wt_score_enables_difference_without_observed_wt(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        "proteingym",
+        ["M1A"],
+        [0.5],
+        wt_sequence=wt_sequence,
+        wt_score=-0.25,
+        add_relative_score=True,
+        relative_method="difference",
+        relative_output_col="score_difference",
+        add_wildtype_row=True,
+        require_wt_for_transforms=True,
+    )
+
+    assert pd.isna(result.iloc[0]["score_raw"])
+    assert pd.isna(result.iloc[0]["score_difference"])
+    assert result.iloc[1]["score_raw"] == 0.5
+    assert result.iloc[1]["score_difference"] == 0.75
+    assert result.attrs["dms_parser_wt_resolution"]["score"] == -0.25
+    assert (
+        result.attrs["dms_parser_wt_resolution"]["score_provenance"]
+        == "user_fallback"
+    )
+
+
+def test_manual_wt_score_cannot_replace_observed_wt(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    with pytest.raises(WildTypeConflictError, match="fallback conflicts"):
+        _build_source_dataset(
+            tmp_path,
+            "proteingym",
+            ["WT", "M1A"],
+            [1.0, 0.5],
+            wt_sequence=wt_sequence,
+            wt_score=0.0,
+        )
+
+
+def test_matching_manual_wt_score_preserves_observed_provenance(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        "proteingym",
+        ["WT", "M1A"],
+        [1.0, 0.5],
+        wt_sequence=wt_sequence,
+        wt_score=1.0,
+        add_relative_score=True,
+        relative_method="difference",
+    )
+
+    resolution = result.attrs["dms_parser_wt_resolution"]
+    assert resolution["score"] == 1.0
+    assert resolution["score_provenance"] == "observed_wildtype_row"
+    assert result["score_raw"].tolist() == [1.0, 0.5]
 
 
 def test_proteingym_scores_are_unchanged_without_transformations(

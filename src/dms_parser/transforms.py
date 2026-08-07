@@ -7,10 +7,48 @@ import logging
 import numpy as np
 import pandas as pd
 
+from dms_parser._wildtype import resolve_wt_score
 from dms_parser.constants import DEFAULT_EPSILON, NEUTRAL_LABEL
-from dms_parser.exceptions import MissingWildTypeError
+from dms_parser.exceptions import InvalidDatasetError, MissingWildTypeError
 
 logger = logging.getLogger(__name__)
+
+
+def _finite_values(df: pd.DataFrame, score_col: str, operation: str) -> pd.Series:
+    """Return finite numeric values or reject an unsafe transformation domain."""
+    values = pd.to_numeric(df[score_col], errors="coerce").astype(float)
+    if not np.isfinite(values.to_numpy()).all():
+        raise InvalidDatasetError(
+            f"Transformation {operation!r} requires finite values in "
+            f"{score_col!r}."
+        )
+    return values
+
+
+def _validate_new_output_column(
+    df: pd.DataFrame,
+    output_col: str,
+    operation: str,
+) -> None:
+    """Reject invalid or destructive generated-column assignments."""
+    if not isinstance(output_col, str) or not output_col.strip():
+        raise InvalidDatasetError(
+            f"Transformation {operation!r} requires a non-empty output column."
+        )
+    if output_col in df.columns:
+        raise InvalidDatasetError(
+            f"Transformation {operation!r} cannot overwrite existing column "
+            f"{output_col!r}."
+        )
+
+
+def _finite_result(values: pd.Series, operation: str) -> pd.Series:
+    """Return a generated series only when every result is finite."""
+    if not np.isfinite(values.to_numpy()).all():
+        raise InvalidDatasetError(
+            f"Transformation {operation!r} produced a non-finite result."
+        )
+    return values
 
 
 def compute_wt_score(
@@ -22,19 +60,23 @@ def compute_wt_score(
     accepted_status: str = "OK",
 ) -> float:
     """Extract the wild-type reference score."""
-    wt_rows = df[df[wt_col] == True]
-
-    if wt_rows.empty:
-        raise MissingWildTypeError("No wild-type row found in dataset.")
-
+    table = df.copy()
+    if wt_col != "is_wildtype":
+        table["is_wildtype"] = table[wt_col]
     if status_col is not None:
-        wt_rows = wt_rows[wt_rows[status_col] == accepted_status]
-
-    numeric_scores = pd.to_numeric(wt_rows[score_col], errors="coerce").dropna()
-    if numeric_scores.empty:
+        table["status"] = table[status_col]
+        table.loc[table["status"] != accepted_status, "is_wildtype"] = False
+    table["score_raw"] = table[score_col]
+    score, _, observed, _ = resolve_wt_score(
+        table,
+        None,
+        dataset_id="dataset",
+    )
+    if score is None:
+        if not observed:
+            raise MissingWildTypeError("No wild-type row found in dataset.")
         raise MissingWildTypeError("No valid numeric wild-type score found in dataset.")
-
-    return float(numeric_scores.mean())
+    return score
 
 
 def add_wt_relative_score(
@@ -46,6 +88,7 @@ def add_wt_relative_score(
     output_col: str | None = None,
     status_col: str | None = None,
     accepted_status: str = "OK",
+    wt_score: float | None = None,
 ) -> pd.DataFrame:
     """Add WT-relative score to the dataset.
 
@@ -57,34 +100,71 @@ def add_wt_relative_score(
     """
     df = df.copy()
 
-    wt_score = compute_wt_score(
-        df,
-        score_col,
-        wt_col,
-        status_col=status_col,
-        accepted_status=accepted_status,
-    )
-
-    values = df[score_col].astype(float)
-
-    if method == "ratio":
-        rel = (values + epsilon) / (wt_score + epsilon)
-
-    elif method == "log_ratio":
-        rel = np.log((values + epsilon) / (wt_score + epsilon))
-
-    elif method == "log2_ratio":
-        rel = np.log2((values + epsilon) / (wt_score + epsilon))
-
-    elif method == "difference":
-        rel = values - wt_score
-
-    else:
+    if method not in {"ratio", "log_ratio", "log2_ratio", "difference"}:
         raise ValueError(f"Unsupported method: {method}")
-
     if output_col is None:
         output_col = f"{score_col}_{method}"
+    _validate_new_output_column(df, output_col, method)
+    if wt_score is None:
+        wt_score = compute_wt_score(
+            df,
+            score_col,
+            wt_col,
+            status_col=status_col,
+            accepted_status=accepted_status,
+        )
+    try:
+        resolved_wt_score = float(wt_score)
+    except (TypeError, ValueError) as exc:
+        raise InvalidDatasetError("WT score must be a finite number.") from exc
+    if not np.isfinite(resolved_wt_score):
+        raise InvalidDatasetError("WT score must be a finite number.")
 
+    values = _finite_values(df, score_col, method)
+
+    # ``epsilon`` remains in the public signature for compatibility. Domain
+    # validation now makes numerical stabilization unnecessary, so the exact
+    # documented formulas are used.
+    _ = epsilon
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        if method == "ratio":
+            if resolved_wt_score == 0:
+                raise InvalidDatasetError(
+                    "Transformation 'ratio' requires a non-zero WT score."
+                )
+            rel = values / resolved_wt_score
+
+        elif method in {"log_ratio", "log2_ratio"}:
+            if resolved_wt_score == 0:
+                raise InvalidDatasetError(
+                    f"Transformation {method!r} requires a non-zero WT score."
+                )
+            same_sign = np.signbit(values.to_numpy()) == np.signbit(
+                resolved_wt_score
+            )
+            if (values == 0).any() or not same_sign.all():
+                raise InvalidDatasetError(
+                    f"Transformation {method!r} requires strictly positive "
+                    "score/WT ratios."
+                )
+            ratio = values / resolved_wt_score
+            if np.isfinite(ratio.to_numpy()).all() and (ratio > 0).all():
+                rel = np.log(ratio) if method == "log_ratio" else np.log2(ratio)
+            else:
+                absolute_values = np.abs(values)
+                absolute_wt = abs(resolved_wt_score)
+                if method == "log_ratio":
+                    rel = np.log(absolute_values) - np.log(absolute_wt)
+                else:
+                    rel = np.log2(absolute_values) - np.log2(absolute_wt)
+
+        elif method == "difference":
+            rel = values - resolved_wt_score
+
+    rel = _finite_result(rel, method)
+
+    _validate_new_output_column(df, output_col, method)
     df[output_col] = rel
     logger.info(
         "Applied WT-relative transformation method=%s score_col=%s "
@@ -111,6 +191,7 @@ def add_pseudo_binary_label(
     - otherwise → neutral_label
     """
     df = df.copy()
+    _validate_new_output_column(df, output_col, "pseudo_binary")
     values = df[score_col]
 
     labels = pd.Series(index=df.index, dtype="Int64")
@@ -125,6 +206,7 @@ def add_pseudo_binary_label(
     mask_neutral = (values >= -delta) & (values <= delta)
     labels[mask_neutral] = neutral_label
 
+    _validate_new_output_column(df, output_col, "pseudo_binary")
     df[output_col] = labels
     logger.info(
         "Applied pseudo-binary transformation score_col=%s output_col=%s rows=%d",
@@ -141,13 +223,14 @@ def add_zscore(
 ) -> pd.DataFrame:
     """Apply z-score normalization."""
     df = df.copy()
+    resolved_output_col = output_col or f"{score_col}_zscore"
+    _validate_new_output_column(df, resolved_output_col, "zscore")
 
-    values = df[score_col].astype(float)
+    values = _finite_values(df, score_col, "zscore")
     mean = values.mean()
     std = values.std()
 
-    if std == 0:
-        resolved_output_col = output_col or f"{score_col}_zscore"
+    if len(values) <= 1 or std == 0:
         df[resolved_output_col] = 0.0
         logger.info(
             "Applied z-score transformation score_col=%s output_col=%s rows=%d",
@@ -157,11 +240,8 @@ def add_zscore(
 
     z = (values - mean) / std
 
-    if output_col is None:
-        output_col = f"{score_col}_zscore"
-
-    df[output_col] = z
-    logger.info("Applied z-score transformation score_col=%s output_col=%s rows=%d", score_col, output_col, len(df))
+    df[resolved_output_col] = z
+    logger.info("Applied z-score transformation score_col=%s output_col=%s rows=%d", score_col, resolved_output_col, len(df))
 
     return df
 
@@ -173,13 +253,14 @@ def add_minmax(
 ) -> pd.DataFrame:
     """Apply min-max normalization."""
     df = df.copy()
+    resolved_output_col = output_col or f"{score_col}_minmax"
+    _validate_new_output_column(df, resolved_output_col, "minmax")
 
-    values = df[score_col].astype(float)
+    values = _finite_values(df, score_col, "minmax")
     min_val = values.min()
     max_val = values.max()
 
     if max_val == min_val:
-        resolved_output_col = output_col or f"{score_col}_minmax"
         df[resolved_output_col] = 0.0
         logger.info(
             "Applied min-max transformation score_col=%s output_col=%s rows=%d",
@@ -189,10 +270,7 @@ def add_minmax(
 
     scaled = (values - min_val) / (max_val - min_val)
 
-    if output_col is None:
-        output_col = f"{score_col}_minmax"
-
-    df[output_col] = scaled
-    logger.info("Applied min-max transformation score_col=%s output_col=%s rows=%d", score_col, output_col, len(df))
+    df[resolved_output_col] = scaled
+    logger.info("Applied min-max transformation score_col=%s output_col=%s rows=%d", score_col, resolved_output_col, len(df))
 
     return df

@@ -14,6 +14,10 @@ class MissingWildTypeError(DMSParserError):
     """Raised when no wild-type reference can be identified."""
 
 
+class WildTypeConflictError(DMSParserError):
+    """Raised when trustworthy wild-type evidence disagrees."""
+
+
 class InvalidVariantError(DMSParserError):
     """Raised when a variant string cannot be parsed."""
 

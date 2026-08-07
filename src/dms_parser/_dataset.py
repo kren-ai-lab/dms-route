@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+from dms_parser._wildtype import get_wt_resolution, resolve_wt_sequence
+from dms_parser.exceptions import MissingWildTypeError
 from dms_parser.parsing import translate_dna
 
 
@@ -108,6 +110,21 @@ def _mavedb_target_protein(
 
 def _extract_wt_from_metadata(metadata: dict[str, Any]) -> str | None:
     """Resolve a MaveDB WT sequence from score-set metadata."""
+    try:
+        sequence, _ = resolve_wt_sequence(
+            _mavedb_wt_sequence_evidence(metadata),
+            None,
+            dataset_id=str(metadata.get("urn", "MaveDB dataset")),
+        )
+    except MissingWildTypeError:
+        return None
+    return sequence
+
+
+def _mavedb_wt_sequence_evidence(
+    metadata: dict[str, Any],
+) -> tuple[tuple[str, str], ...]:
+    """Return only explicit MaveDB targetSequence sequence evidence."""
     hits: list[tuple[str, str]] = []
 
     def walk(value: Any, path: str = "root") -> None:
@@ -117,35 +134,40 @@ def _extract_wt_from_metadata(metadata: dict[str, Any]) -> str | None:
         elif isinstance(value, list):
             for index, item in enumerate(value):
                 walk(item, f"{path}[{index}]")
-        elif isinstance(value, str):
+        elif isinstance(value, str) and path.lower().endswith(
+            "targetsequence.sequence"
+        ):
             hits.append((path, value.strip()))
 
     walk(metadata)
-    sequence_fields = [
-        (path, sequence)
-        for path, sequence in hits
-        if "sequence" in path.lower()
-    ]
-
-    for path, sequence in sequence_fields:
+    evidence: list[tuple[str, str]] = []
+    for path, sequence in hits:
         normalized = sequence.upper()
-        if path.lower().endswith("targetsequence.sequence"):
-            if set(normalized) <= set("ACGTN"):
-                return translate_dna(
-                    normalized,
-                    frame=1,
-                    stop_at_stop=True,
-                )
-            return normalized
-
-    for _, sequence in sequence_fields:
-        normalized = sequence.upper()
-        if set(normalized) <= set("ACDEFGHIKLMNPQRSTVWYBXZJUO*"):
-            return normalized
         if set(normalized) <= set("ACGTN"):
-            return translate_dna(
+            normalized = translate_dna(
                 normalized,
                 frame=1,
                 stop_at_stop=True,
             )
-    return None
+        evidence.append((f"mavedb_score_set_metadata:{path}", normalized))
+    return tuple(evidence)
+
+
+def _wt_summary_fields(
+    built_table: pd.DataFrame,
+    *,
+    requested_transformation: str | None,
+    transformed_output_column: str | None,
+) -> dict[str, Any]:
+    """Return stable WT provenance fields for one summary record."""
+    resolution = get_wt_resolution(built_table)
+    return {
+        "wt_sequence_provenance": resolution.sequence_provenance,
+        "wt_score": resolution.score,
+        "wt_score_provenance": resolution.score_provenance,
+        "observed_wildtype_row": resolution.observed_wildtype_row,
+        "synthetic_wildtype_inserted": resolution.synthetic_wildtype_inserted,
+        "requested_transformation": requested_transformation,
+        "transformed_output_column": transformed_output_column,
+        "wt_score_unavailable_reason": resolution.score_unavailable_reason,
+    }

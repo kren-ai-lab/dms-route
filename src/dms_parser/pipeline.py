@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -15,11 +16,16 @@ import requests
 
 from dms_parser._dataset import (
     _completed_dataset_counts,
-    _extract_wt_from_metadata,
+    _mavedb_wt_sequence_evidence,
     _metadata_text,
     _mavedb_gene,
     _mavedb_target_protein,
     _mavedb_uniprot_id,
+    _wt_summary_fields,
+)
+from dms_parser._wildtype import (
+    replace_wt_sequence_provenance,
+    resolve_wt_sequence,
 )
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
 from dms_parser.config import validate_pipeline_config
@@ -30,7 +36,13 @@ from dms_parser.downloads import (
     download_and_standardize_dataset,
     download_and_standardize_datasets,
 )
-from dms_parser.exceptions import InvalidPipelineOptionError
+from dms_parser.exceptions import (
+    DMSParserError,
+    DatasetNotFoundError,
+    DownloadError,
+    InvalidDatasetError,
+    InvalidPipelineOptionError,
+)
 from dms_parser.io import download_file, read_table, write_table
 from dms_parser.sources.mavedb_catalog import MAVEDB_API_URL
 from dms_parser.sources.proteingym_resources import get_proteingym_resource
@@ -169,13 +181,23 @@ def process_proteingym(
                 metadata_table["DMS_id"] == dataset_id
             ]
             if metadata_matches.empty:
-                raise ValueError(
+                raise DatasetNotFoundError(
                     f"No information found in metadata for {dataset_id}."
                 )
 
             selected_row = metadata_matches.iloc[0]
             resolved_dataset_id = selected_row["DMS_id"]
-            wt_sequence = selected_row["target_seq"]
+            metadata_sequence = _metadata_text(selected_row, "target_seq")
+            automatic_sequence = (
+                (("proteingym_reference_metadata", metadata_sequence),)
+                if metadata_sequence is not None
+                else ()
+            )
+            wt_sequence, wt_sequence_provenance = resolve_wt_sequence(
+                automatic_sequence,
+                entry.get("wt_sequence"),
+                dataset_id=dataset_id,
+            )
             uniprot_id = _metadata_text(selected_row, "UniProt_ID")
             protein_id = _metadata_text(selected_row, "molecule_name")
             gene = _metadata_text(selected_row, "gene", "Gene", "gene_name")
@@ -192,6 +214,10 @@ def process_proteingym(
                     "dataset_id": resolved_dataset_id,
                     "target_protein": uniprot_id or protein_id or "Unknown",
                     "wt_length": len(wt_sequence),
+                    "wt_sequence_sha256": hashlib.sha256(
+                        wt_sequence.encode("utf-8")
+                    ).hexdigest(),
+                    "wt_sequence_provenance": wt_sequence_provenance,
                     "raw_rows": None,
                 }
             )
@@ -222,6 +248,8 @@ def process_proteingym(
             build_kwargs.setdefault("add_binary_label", False)
             build_kwargs.setdefault("add_wildtype_row", False)
             build_kwargs.setdefault("drop_failed", False)
+            if entry.get("wt_score") is not None:
+                build_kwargs["wt_score"] = entry["wt_score"]
             build_kwargs["dataset_id"] = resolved_dataset_id
             build_kwargs["protein_id"] = protein_id
             build_kwargs["gene"] = gene
@@ -238,6 +266,10 @@ def process_proteingym(
                 wt_sequence=wt_sequence,
                 **build_kwargs,
             )
+            replace_wt_sequence_provenance(
+                built_table,
+                wt_sequence_provenance,
+            )
             counts = _completed_dataset_counts(built_table, raw_rows=initial_rows)
 
             output_file = (
@@ -249,12 +281,28 @@ def process_proteingym(
             row.update(
                 {
                     "status": "OK",
+                    **_wt_summary_fields(
+                        built_table,
+                        requested_transformation=(
+                            build_kwargs.get("relative_method", "log_ratio")
+                            if build_kwargs["add_relative_score"]
+                            else None
+                        ),
+                        transformed_output_column=(
+                            build_kwargs.get(
+                                "relative_output_col",
+                                "score_log_ratio",
+                            )
+                            if build_kwargs["add_relative_score"]
+                            else None
+                        ),
+                    ),
                     **counts,
                     "output_file": str(output_file),
                 }
             )
             logger.info("[proteingym] Complete. Retained rows: %d/%d", counts["output_rows"], initial_rows)
-        except Exception as exc:  # noqa: BLE001 - isolate dataset failures
+        except (DMSParserError, requests.RequestException, OSError) as exc:
             row["error"] = str(exc)
             logger.exception("[proteingym] Error processing %s", dataset_id)
 
@@ -299,7 +347,7 @@ def process_mavedb(
                 timeout=60,
             )
             if metadata_response.status_code != 200:
-                raise ValueError(
+                raise DownloadError(
                     "Error while downloading metadata "
                     f"(HTTP {metadata_response.status_code})."
                 )
@@ -308,9 +356,13 @@ def process_mavedb(
             gene = _mavedb_gene(metadata)
             target_name = _mavedb_target_protein(metadata, gene)
             uniprot_id = _mavedb_uniprot_id(metadata)
-            wt_sequence = _extract_wt_from_metadata(metadata)
-            if wt_sequence is None:
-                raise ValueError("No WT found in metadata.")
+            wt_sequence, wt_sequence_provenance = resolve_wt_sequence(
+                _mavedb_wt_sequence_evidence(metadata),
+                entry.get("wt_sequence"),
+                dataset_id=dataset_id,
+            )
+            if wt_sequence_provenance.startswith("mavedb_score_set_metadata:"):
+                wt_sequence_provenance = "mavedb_score_set_metadata"
             logger.debug(
                 "[mavedb] Resolved WT source=score_set_metadata dataset_id=%s length=%d",
                 dataset_id, len(wt_sequence),
@@ -321,6 +373,10 @@ def process_mavedb(
                     "dataset_id": dataset_id,
                     "target_protein": target_name,
                     "wt_length": len(wt_sequence),
+                    "wt_sequence_sha256": hashlib.sha256(
+                        wt_sequence.encode("utf-8")
+                    ).hexdigest(),
+                    "wt_sequence_provenance": wt_sequence_provenance,
                     "raw_rows": None,
                 }
             )
@@ -356,7 +412,9 @@ def process_mavedb(
                 None,
             )
             if not hgvs_col or not score_col:
-                raise ValueError("Neither score nor HGVS columns were detected.")
+                raise InvalidDatasetError(
+                    "Neither score nor HGVS columns were detected."
+                )
             logger.debug(
                 "[mavedb] Detected columns dataset_id=%s variant_col=%s score_col=%s",
                 dataset_id, hgvs_col, score_col,
@@ -371,6 +429,8 @@ def process_mavedb(
             build_kwargs.setdefault("add_binary_label", False)
             build_kwargs.setdefault("add_wildtype_row", False)
             build_kwargs.setdefault("drop_failed", False)
+            if entry.get("wt_score") is not None:
+                build_kwargs["wt_score"] = entry["wt_score"]
             build_kwargs["score_col"] = score_col
             build_kwargs["hgvs_col"] = hgvs_col
             build_kwargs["dataset_id"] = dataset_id
@@ -383,6 +443,10 @@ def process_mavedb(
                 wt_sequence=wt_sequence,
                 **build_kwargs,
             )
+            replace_wt_sequence_provenance(
+                built_table,
+                wt_sequence_provenance,
+            )
             counts = _completed_dataset_counts(built_table, raw_rows=initial_rows)
 
             output_file = (
@@ -394,12 +458,28 @@ def process_mavedb(
             row.update(
                 {
                     "status": "OK",
+                    **_wt_summary_fields(
+                        built_table,
+                        requested_transformation=(
+                            build_kwargs.get("relative_method", "log_ratio")
+                            if build_kwargs["add_relative_score"]
+                            else None
+                        ),
+                        transformed_output_column=(
+                            build_kwargs.get(
+                                "relative_output_col",
+                                "score_log_ratio",
+                            )
+                            if build_kwargs["add_relative_score"]
+                            else None
+                        ),
+                    ),
                     **counts,
                     "output_file": str(output_file),
                 }
             )
             logger.info("[mavedb] Complete. Retained: %d/%d", counts["output_rows"], initial_rows)
-        except Exception as exc:  # noqa: BLE001 - isolate dataset failures
+        except (DMSParserError, requests.RequestException, OSError) as exc:
             row["error"] = str(exc)
             logger.exception("[mavedb] Error processing %s", dataset_id)
 

@@ -391,6 +391,98 @@ def test_dataset_failure_does_not_abort_later_dataset(
     assert builder_calls == ["SECOND"]
 
 
+def test_proteingym_pipeline_forwards_dataset_wt_fallbacks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = pd.DataFrame(
+        {"DMS_filename": ["assay.csv"], "DMS_id": ["ASSAY"], "target_seq": [None]}
+    )
+    benchmark = pd.DataFrame(
+        {"DMS_id": ["ASSAY"], "mutant": ["M1A"], "DMS_score": [0.5]}
+    )
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        pipeline_module,
+        "download_file",
+        lambda url, output_path, overwrite=False: Path(output_path),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "read_table",
+        lambda path: metadata if Path(path).name == "DMS_substitutions.csv" else benchmark,
+    )
+
+    def build_dataset(**kwargs: Any) -> pd.DataFrame:
+        calls.append(kwargs)
+        return standardized_table()
+
+    monkeypatch.setattr(pipeline_module, "build_proteingym_dataset", build_dataset)
+
+    summary = pipeline_module.process_proteingym(
+        {
+            "resource": "dms_substitutions",
+            "dir_base": tmp_path / "proteingym",
+            "datasets": [
+                {
+                    "dataset_id": "ASSAY",
+                    "wt_sequence": "MKT",
+                    "wt_score": -0.25,
+                    "build_kwargs": {
+                        "add_relative_score": True,
+                        "relative_method": "difference",
+                    },
+                }
+            ],
+        }
+    )
+
+    assert summary[0]["status"] == "OK"
+    assert calls[0]["wt_sequence"] == "MKT"
+    assert calls[0]["wt_score"] == -0.25
+    assert calls[0]["add_relative_score"] is True
+    assert calls[0]["relative_method"] == "difference"
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
+def test_pipeline_propagates_unexpected_builder_exception(
+    error_type: type[Exception],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = pd.DataFrame({"DMS_id": ["ASSAY"], "target_seq": ["MKT"]})
+    benchmark = pd.DataFrame(
+        {"DMS_id": ["ASSAY"], "mutant": ["M1A"], "DMS_score": [0.5]}
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "download_file",
+        lambda url, output_path, overwrite=False: Path(output_path),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "read_table",
+        lambda path: metadata if Path(path).name == "DMS_substitutions.csv" else benchmark,
+    )
+    cause = error_type("unexpected builder failure")
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_proteingym_dataset",
+        lambda **kwargs: (_ for _ in ()).throw(cause),
+    )
+
+    with pytest.raises(error_type) as exc_info:
+        pipeline_module.process_proteingym(
+            {
+                "resource": "dms_substitutions",
+                "dir_base": tmp_path / "proteingym",
+                "datasets": [{"dataset_id": "ASSAY"}],
+            }
+        )
+
+    assert exc_info.value is cause
+
+
 def test_completed_dataset_counts_exclude_synthetic_wt_from_discarded() -> None:
     built_table = pd.DataFrame(
         {

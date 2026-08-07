@@ -8,7 +8,13 @@ from typing import Any
 
 import pandas as pd
 
-from dms_parser.exceptions import MissingWildTypeError
+from dms_parser._wildtype import (
+    WildTypeResolution,
+    resolve_wt_score,
+    set_wt_resolution,
+    validate_standardization_options,
+)
+from dms_parser.exceptions import InvalidDatasetError, MissingWildTypeError
 from dms_parser.io import read_table
 from dms_parser.parsing import (
     count_mutations,
@@ -33,6 +39,31 @@ from dms_parser.validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_builder_standardization_options(
+    *,
+    wt_score: float | None,
+    add_relative_score: bool,
+    relative_method: str,
+    relative_output_col: str,
+    add_binary_label: bool,
+    delta: float,
+    higher_is_better: bool,
+    binary_output_col: str,
+) -> None:
+    """Validate shared builder options before reading the input table."""
+    validate_standardization_options(
+        wt_sequence=None,
+        wt_score=wt_score,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+    )
 
 
 def _resolve_wt_sequence(
@@ -203,6 +234,7 @@ def _maybe_add_transforms(
     delta: float = 0.1,
     higher_is_better: bool = True,
     binary_output_col: str = "score_binary_like",
+    wt_score: float | None = None,
 ) -> pd.DataFrame:
     """Optionally add WT-relative score and pseudo-binary label."""
     out = df.copy()
@@ -215,6 +247,7 @@ def _maybe_add_transforms(
             method=relative_method,
             output_col=relative_output_col,
             status_col="status",
+            wt_score=wt_score,
         )
 
     if add_binary_label:
@@ -253,6 +286,8 @@ def _finalize_dataset(
     drop_failed: bool,
     validate_output: bool,
     require_wt_for_transforms: bool,
+    wt_score: float | None,
+    wt_sequence_provenance: str,
 ) -> pd.DataFrame:
     """Apply the common post-parse dataset construction stages."""
     out = df.copy()
@@ -280,15 +315,12 @@ def _finalize_dataset(
     if drop_failed:
         out = out[out["status"] == "OK"].copy()
 
-    out = _maybe_add_wildtype_row(
-        out,
-        add_wildtype_row=add_wildtype_row,
-        wt_sequence=wt_sequence,
-        dataset_id=dataset_id,
-        source=source,
-        protein_id=protein_id,
-        gene=gene,
-        uniprot_id=uniprot_id,
+    resolved_wt_score, score_provenance, observed_wt_row, unavailable_reason = (
+        resolve_wt_score(
+            out,
+            wt_score,
+            dataset_id=dataset_id or "dataset",
+        )
     )
 
     if add_relative_score:
@@ -303,11 +335,14 @@ def _finalize_dataset(
                 delta=delta,
                 higher_is_better=higher_is_better,
                 binary_output_col=binary_output_col,
+                wt_score=resolved_wt_score,
             )
         except MissingWildTypeError as exc:
             if require_wt_for_transforms:
-                raise ValueError(
-                    "WT-relative transforms were requested, but no valid numeric WT score was found."
+                raise MissingWildTypeError(
+                    f"Transformation {relative_method!r} for "
+                    f"{dataset_id or 'dataset'!r} requires a reliable WT score; "
+                    "provide wt_score (CLI: --wt-score)."
                 ) from exc
             logger.warning(
                 "Skipped requested WT-relative transformation source=%s "
@@ -315,6 +350,11 @@ def _finalize_dataset(
                 source,
                 dataset_id,
             )
+        except InvalidDatasetError as exc:
+            raise InvalidDatasetError(
+                f"Transformation {relative_method!r} for "
+                f"{dataset_id or 'dataset'!r} failed: {exc}"
+            ) from exc
         else:
             logger.info(
                 "Applied score transformations source=%s dataset_id=%s "
@@ -328,6 +368,17 @@ def _finalize_dataset(
         raise ValueError(
             "add_binary_label=True requires add_relative_score=True in this builder version."
         )
+
+    out = _maybe_add_wildtype_row(
+        out,
+        add_wildtype_row=add_wildtype_row,
+        wt_sequence=wt_sequence,
+        dataset_id=dataset_id,
+        source=source,
+        protein_id=protein_id,
+        gene=gene,
+        uniprot_id=uniprot_id,
+    )
 
     if validate_output:
         validate_standard_dataset(
@@ -346,6 +397,22 @@ def _finalize_dataset(
             only_status_ok=True,
             status_col="status",
         )
+
+    synthetic_inserted = bool(
+        (out["is_wildtype"].eq(True) & out["is_synthetic"].eq(True)).any()
+    )
+    set_wt_resolution(
+        out,
+        WildTypeResolution(
+            sequence=wt_sequence,
+            score=resolved_wt_score,
+            sequence_provenance=wt_sequence_provenance,
+            score_provenance=score_provenance,
+            observed_wildtype_row=observed_wt_row,
+            synthetic_wildtype_inserted=synthetic_inserted,
+            score_unavailable_reason=unavailable_reason,
+        ),
+    )
 
     logger.info(
         "Completed dataset build source=%s dataset_id=%s input_rows=%d "
@@ -386,8 +453,19 @@ def build_mavedb_dataset(
     drop_failed: bool = False,
     validate_output: bool = True,
     require_wt_for_transforms: bool = False,
+    wt_score: float | None = None,
 ) -> pd.DataFrame:
     """Build a standardized MaveDB-like dataset with opt-in score transforms."""
+    _validate_builder_standardization_options(
+        wt_score=wt_score,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+    )
     logger.info("Starting dataset build source=mavedb dataset_id=%s", dataset_id)
     logger.debug(
         "Builder options source=mavedb dataset_id=%s score_col=%s "
@@ -414,6 +492,9 @@ def build_mavedb_dataset(
         dna_frame=dna_frame,
         stop_at_stop=stop_at_stop,
     )
+    wt_sequence_provenance = (
+        "provided_sequence" if wt_sequence is not None else "fasta_file"
+    )
 
     parsed = df[hgvs_col].apply(lambda value: _safe_hgvs_to_sequence(wt_seq, value))
     parsed_df = pd.DataFrame(parsed.tolist(), index=df.index)
@@ -439,6 +520,8 @@ def build_mavedb_dataset(
         drop_failed=drop_failed,
         validate_output=validate_output,
         require_wt_for_transforms=require_wt_for_transforms,
+        wt_score=wt_score,
+        wt_sequence_provenance=wt_sequence_provenance,
     )
 
 
@@ -468,8 +551,19 @@ def build_proteingym_dataset(
     drop_failed: bool = False,
     validate_output: bool = True,
     require_wt_for_transforms: bool = False,
+    wt_score: float | None = None,
 ) -> pd.DataFrame:
     """Build a standardized ProteinGym-like dataset with opt-in score transforms."""
+    _validate_builder_standardization_options(
+        wt_score=wt_score,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+    )
     logger.info("Starting dataset build source=proteingym dataset_id=%s", dataset_id)
     logger.debug(
         "Builder options source=proteingym dataset_id=%s score_col=%s "
@@ -496,6 +590,9 @@ def build_proteingym_dataset(
         wt_sequence_is_dna=wt_sequence_is_dna,
         dna_frame=dna_frame,
         stop_at_stop=stop_at_stop,
+    )
+    wt_sequence_provenance = (
+        "provided_sequence" if wt_sequence is not None else "fasta_file"
     )
 
     parsed = df[variant_col].apply(
@@ -535,4 +632,6 @@ def build_proteingym_dataset(
         drop_failed=drop_failed,
         validate_output=validate_output,
         require_wt_for_transforms=require_wt_for_transforms,
+        wt_score=wt_score,
+        wt_sequence_provenance=wt_sequence_provenance,
     )

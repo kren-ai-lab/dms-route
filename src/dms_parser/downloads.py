@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -18,22 +19,32 @@ import requests
 
 from dms_parser._dataset import (
     _completed_dataset_counts,
-    _extract_wt_from_metadata,
+    _mavedb_wt_sequence_evidence,
     _metadata_text,
     _mavedb_gene,
     _mavedb_target_protein,
     _mavedb_uniprot_id,
+    _wt_summary_fields,
+)
+from dms_parser._wildtype import (
+    replace_wt_sequence_provenance,
+    resolve_wt_sequence,
+    validate_standardization_options,
 )
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
 from dms_parser.cache import FilesystemCache
-from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
+from dms_parser.catalog import (
+    DatasetRecord,
+    get_dataset_metadata,
+    list_datasets,
+    normalize_raw_metadata,
+)
 from dms_parser.config import validate_source_dataset_id
 from dms_parser.exceptions import (
     DMSParserError,
     DatasetNotFoundError,
     InvalidDatasetError,
     InvalidPipelineOptionError,
-    MissingWildTypeError,
     SourceConfigurationError,
 )
 from dms_parser.io import (
@@ -58,6 +69,7 @@ logger = logging.getLogger(__name__)
 _PROTEINGYM_SUBSTITUTIONS_BENCHMARK_CACHE_ID = (
     "resource-data-dms-substitutions"
 )
+_MAVEDB_METADATA_CACHE_SOURCE = "mavedb-metadata"
 _PORTABLE_DATASET_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 _EXPECTED_DOWNLOAD_ERRORS = (
     DMSParserError,
@@ -142,6 +154,7 @@ class _ProteinGymDownloadMetadata:
     """Resolved ProteinGym fields needed by the existing builder."""
 
     wt_sequence: str
+    wt_sequence_provenance: str
     protein_id: str | None
     gene: str | None
     uniprot_id: str | None
@@ -156,6 +169,21 @@ class _MaveDBDownloadInput:
     provenance: Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class _StandardizationOptions:
+    """Validated WT and transformation options for one dataset."""
+
+    wt_sequence: str | None = None
+    wt_score: float | None = None
+    add_relative_score: bool = False
+    relative_method: str = "log_ratio"
+    relative_output_col: str = "score_log_ratio"
+    add_binary_label: bool = False
+    delta: float = 0.1
+    higher_is_better: bool = True
+    binary_output_col: str = "score_binary_like"
+
+
 def download_and_standardize_dataset(
     source: str,
     dataset_id: str,
@@ -165,6 +193,15 @@ def download_and_standardize_dataset(
     refresh: bool = False,
     drop_failed: bool = False,
     add_wildtype_row: bool = False,
+    wt_sequence: str | None = None,
+    wt_score: float | None = None,
+    add_relative_score: bool = False,
+    relative_method: str = "log_ratio",
+    relative_output_col: str = "score_log_ratio",
+    add_binary_label: bool = False,
+    delta: float = 0.1,
+    higher_is_better: bool = True,
+    binary_output_col: str = "score_binary_like",
     overwrite: bool = False,
     acquisition: str | None = None,
     snapshot_record_id: str | None = None,
@@ -177,6 +214,17 @@ def download_and_standardize_dataset(
         acquisition=acquisition,
         snapshot_record_id=snapshot_record_id,
         include_superseded=include_superseded,
+    )
+    standardization = _standardization_options(
+        wt_sequence=wt_sequence,
+        wt_score=wt_score,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
     )
     if not isinstance(output_dir, (str, Path)) or not str(output_dir).strip():
         raise InvalidPipelineOptionError("output_dir must be a non-empty path.")
@@ -208,6 +256,7 @@ def download_and_standardize_dataset(
             refresh=refresh,
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
+            standardization=standardization,
         )
     elif acquisition_method == "snapshot":
         assert snapshot_record_id is not None
@@ -219,6 +268,7 @@ def download_and_standardize_dataset(
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
             include_superseded=include_superseded,
+            standardization=standardization,
         )
     else:
         built_table, summary = _download_mavedb_dataset(
@@ -227,6 +277,7 @@ def download_and_standardize_dataset(
             refresh=refresh,
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
+            standardization=standardization,
         )
 
     return _publish_download_result(
@@ -247,6 +298,15 @@ def download_and_standardize_datasets(
     refresh: bool = False,
     drop_failed: bool = False,
     add_wildtype_row: bool = False,
+    wt_sequence: Mapping[str, str] | None = None,
+    wt_score: Mapping[str, float] | None = None,
+    add_relative_score: bool = False,
+    relative_method: str = "log_ratio",
+    relative_output_col: str = "score_log_ratio",
+    add_binary_label: bool = False,
+    delta: float = 0.1,
+    higher_is_better: bool = True,
+    binary_output_col: str = "score_binary_like",
     overwrite: bool = False,
     acquisition: str | None = None,
     snapshot_record_id: str | None = None,
@@ -270,6 +330,22 @@ def download_and_standardize_datasets(
     )
     if not isinstance(cache, FilesystemCache):
         raise InvalidPipelineOptionError("cache must be a FilesystemCache.")
+    sequence_fallbacks, score_fallbacks = _validate_batch_fallbacks(
+        plan.dataset_ids,
+        wt_sequence=wt_sequence,
+        wt_score=wt_score,
+    )
+    standardization = _standardization_options(
+        wt_sequence=None,
+        wt_score=None,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+    )
 
     batch_provenance: dict[str, Mapping[str, Any]] | None = None
     if source == "proteingym":
@@ -280,6 +356,9 @@ def download_and_standardize_datasets(
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
             overwrite=overwrite,
+            standardization=standardization,
+            sequence_fallbacks=sequence_fallbacks,
+            score_fallbacks=score_fallbacks,
         )
     elif acquisition_method == "snapshot":
         assert snapshot_record_id is not None
@@ -292,6 +371,9 @@ def download_and_standardize_datasets(
             add_wildtype_row=add_wildtype_row,
             overwrite=overwrite,
             include_superseded=include_superseded,
+            standardization=standardization,
+            sequence_fallbacks=sequence_fallbacks,
+            score_fallbacks=score_fallbacks,
         )
     else:
         entries = _download_mavedb_batch(
@@ -301,6 +383,9 @@ def download_and_standardize_datasets(
             drop_failed=drop_failed,
             add_wildtype_row=add_wildtype_row,
             overwrite=overwrite,
+            standardization=standardization,
+            sequence_fallbacks=sequence_fallbacks,
+            score_fallbacks=score_fallbacks,
         )
 
     records = [
@@ -389,6 +474,114 @@ def _validate_download_acquisition(
             "include_superseded requires acquisition='snapshot'."
         )
     return method
+
+
+def _standardization_options(
+    *,
+    wt_sequence: str | None,
+    wt_score: float | None,
+    add_relative_score: bool,
+    relative_method: str,
+    relative_output_col: str,
+    add_binary_label: bool,
+    delta: float,
+    higher_is_better: bool,
+    binary_output_col: str,
+) -> _StandardizationOptions:
+    """Validate and collect options before source or output side effects."""
+    validate_standardization_options(
+        wt_sequence=wt_sequence,
+        wt_score=wt_score,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+    )
+    return _StandardizationOptions(
+        wt_sequence=wt_sequence,
+        wt_score=wt_score,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=float(delta),
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+    )
+
+
+def _validate_batch_fallbacks(
+    dataset_ids: tuple[str, ...],
+    *,
+    wt_sequence: Mapping[str, str] | None,
+    wt_score: Mapping[str, float] | None,
+) -> tuple[dict[str, str], dict[str, float]]:
+    """Validate per-dataset fallback mappings before acquisition."""
+    requested = set(dataset_ids)
+    sequences = _validate_fallback_mapping(
+        wt_sequence,
+        requested=requested,
+        field="wt_sequence",
+    )
+    scores = _validate_fallback_mapping(
+        wt_score,
+        requested=requested,
+        field="wt_score",
+    )
+    for dataset_id, sequence in sequences.items():
+        resolve_wt_sequence((), sequence, dataset_id=dataset_id)
+    for dataset_id, score in scores.items():
+        validate_standardization_options(
+            wt_sequence=None,
+            wt_score=score,
+            add_relative_score=False,
+            relative_method="log_ratio",
+            relative_output_col="score_log_ratio",
+            add_binary_label=False,
+            delta=0.1,
+            higher_is_better=True,
+            binary_output_col="score_binary_like",
+        )
+    return sequences, scores
+
+
+def _validate_fallback_mapping(
+    value: Mapping[str, Any] | None,
+    *,
+    requested: set[str],
+    field: str,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise InvalidPipelineOptionError(
+            f"{field} must be a mapping from dataset ID to fallback value."
+        )
+    resolved = dict(value)
+    invalid_keys = [key for key in resolved if key not in requested]
+    if invalid_keys:
+        joined = ", ".join(repr(key) for key in invalid_keys)
+        raise InvalidPipelineOptionError(
+            f"{field} contains mappings for unrequested datasets: {joined}."
+        )
+    return resolved
+
+
+def _options_for_dataset(
+    options: _StandardizationOptions,
+    dataset_id: str,
+    sequence_fallbacks: Mapping[str, str],
+    score_fallbacks: Mapping[str, float],
+) -> _StandardizationOptions:
+    """Return common options with one dataset's independent WT fallbacks."""
+    return replace(
+        options,
+        wt_sequence=sequence_fallbacks.get(dataset_id),
+        wt_score=score_fallbacks.get(dataset_id),
+    )
 
 
 def _validate_dataset_batch_request(
@@ -497,6 +690,9 @@ def _download_mavedb_batch(
     drop_failed: bool,
     add_wildtype_row: bool,
     overwrite: bool,
+    standardization: _StandardizationOptions,
+    sequence_fallbacks: Mapping[str, str],
+    score_fallbacks: Mapping[str, float],
 ) -> tuple[DatasetBatchDownloadEntry, ...]:
     """Process independent MaveDB URNs through the single-download API."""
     entries: list[DatasetBatchDownloadEntry] = []
@@ -505,6 +701,12 @@ def _download_mavedb_batch(
         plan.output_dirs,
         strict=True,
     ):
+        options = _options_for_dataset(
+            standardization,
+            dataset_id,
+            sequence_fallbacks,
+            score_fallbacks,
+        )
         try:
             result = download_and_standardize_dataset(
                 "mavedb",
@@ -514,6 +716,15 @@ def _download_mavedb_batch(
                 refresh=refresh,
                 drop_failed=drop_failed,
                 add_wildtype_row=add_wildtype_row,
+                wt_sequence=options.wt_sequence,
+                wt_score=options.wt_score,
+                add_relative_score=options.add_relative_score,
+                relative_method=options.relative_method,
+                relative_output_col=options.relative_output_col,
+                add_binary_label=options.add_binary_label,
+                delta=options.delta,
+                higher_is_better=options.higher_is_better,
+                binary_output_col=options.binary_output_col,
                 overwrite=overwrite,
             )
         except _EXPECTED_DOWNLOAD_ERRORS as exc:
@@ -547,6 +758,9 @@ def _download_mavedb_snapshot_batch(
     add_wildtype_row: bool,
     overwrite: bool,
     include_superseded: bool,
+    standardization: _StandardizationOptions,
+    sequence_fallbacks: Mapping[str, str],
+    score_fallbacks: Mapping[str, float],
 ) -> tuple[
     tuple[DatasetBatchDownloadEntry, ...],
     dict[str, Mapping[str, Any]],
@@ -600,11 +814,18 @@ def _download_mavedb_snapshot_batch(
             )
             continue
         try:
+            options = _options_for_dataset(
+                standardization,
+                dataset_id,
+                sequence_fallbacks,
+                score_fallbacks,
+            )
             built_table, summary = _build_mavedb_download(
                 dataset_id,
                 _snapshot_download_input(datasets[dataset_id]),
                 drop_failed=drop_failed,
                 add_wildtype_row=add_wildtype_row,
+                standardization=options,
             )
             result = _publish_download_result(
                 built_table,
@@ -640,6 +861,9 @@ def _download_proteingym_batch(
     drop_failed: bool,
     add_wildtype_row: bool,
     overwrite: bool,
+    standardization: _StandardizationOptions,
+    sequence_fallbacks: Mapping[str, str],
+    score_fallbacks: Mapping[str, float],
 ) -> tuple[DatasetBatchDownloadEntry, ...]:
     """Acquire shared ProteinGym artifacts once and process requested assays."""
     try:
@@ -700,7 +924,11 @@ def _download_proteingym_batch(
             continue
         try:
             resolved_metadata[dataset_id] = (
-                _resolve_proteingym_download_metadata(matches[0], dataset_id)
+                _resolve_proteingym_download_metadata(
+                    matches[0],
+                    dataset_id,
+                    wt_sequence=sequence_fallbacks.get(dataset_id),
+                )
             )
         except _EXPECTED_DOWNLOAD_ERRORS as exc:
             outcomes[dataset_id] = _failed_batch_entry(
@@ -762,6 +990,12 @@ def _download_proteingym_batch(
                         experiment_table,
                         drop_failed=drop_failed,
                         add_wildtype_row=add_wildtype_row,
+                        standardization=_options_for_dataset(
+                            standardization,
+                            dataset_id,
+                            sequence_fallbacks,
+                            score_fallbacks,
+                        ),
                     )
                     result = _publish_download_result(
                         built_table,
@@ -798,6 +1032,7 @@ def _download_proteingym_dataset(
     refresh: bool,
     drop_failed: bool,
     add_wildtype_row: bool,
+    standardization: _StandardizationOptions,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Acquire and build one ProteinGym substitutions assay."""
     metadata_record = get_dataset_metadata(
@@ -810,6 +1045,7 @@ def _download_proteingym_dataset(
     metadata = _resolve_proteingym_download_metadata(
         metadata_record,
         dataset_id,
+        wt_sequence=standardization.wt_sequence,
     )
     benchmark_table = _acquire_proteingym_benchmark(
         cache=cache,
@@ -828,22 +1064,32 @@ def _download_proteingym_dataset(
         experiment_table,
         drop_failed=drop_failed,
         add_wildtype_row=add_wildtype_row,
+        standardization=standardization,
     )
 
 
 def _resolve_proteingym_download_metadata(
     metadata_record: DatasetRecord,
     dataset_id: str,
+    *,
+    wt_sequence: str | None,
 ) -> _ProteinGymDownloadMetadata:
     """Resolve and validate ProteinGym builder metadata without acquisition."""
     metadata = pd.Series(metadata_record.raw_metadata)
-    wt_sequence = _metadata_text(metadata, "target_seq")
-    if wt_sequence is None:
-        raise MissingWildTypeError(
-            f"No WT sequence found in ProteinGym metadata for {dataset_id}."
-        )
+    metadata_sequence = _metadata_text(metadata, "target_seq")
+    automatic = (
+        (("proteingym_reference_metadata", metadata_sequence),)
+        if metadata_sequence is not None
+        else ()
+    )
+    resolved_sequence, sequence_provenance = resolve_wt_sequence(
+        automatic,
+        wt_sequence,
+        dataset_id=dataset_id,
+    )
     return _ProteinGymDownloadMetadata(
-        wt_sequence=wt_sequence,
+        wt_sequence=resolved_sequence,
+        wt_sequence_provenance=sequence_provenance,
         protein_id=_metadata_text(metadata, "molecule_name"),
         gene=_metadata_text(metadata, "gene", "Gene", "gene_name"),
         uniprot_id=_metadata_text(metadata, "UniProt_ID"),
@@ -881,6 +1127,7 @@ def _build_proteingym_download(
     *,
     drop_failed: bool,
     add_wildtype_row: bool,
+    standardization: _StandardizationOptions,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Build one selected ProteinGym assay through the existing builder."""
     with TemporaryDirectory(prefix="dms-parser-download-") as temporary_dir:
@@ -895,13 +1142,24 @@ def _build_proteingym_download(
             gene=metadata.gene,
             uniprot_id=metadata.uniprot_id,
             wt_sequence=metadata.wt_sequence,
-            add_relative_score=False,
-            add_binary_label=False,
+            wt_score=standardization.wt_score,
+            add_relative_score=standardization.add_relative_score,
+            relative_method=standardization.relative_method,
+            relative_output_col=standardization.relative_output_col,
+            add_binary_label=standardization.add_binary_label,
+            delta=standardization.delta,
+            higher_is_better=standardization.higher_is_better,
+            binary_output_col=standardization.binary_output_col,
             add_wildtype_row=add_wildtype_row,
             drop_failed=drop_failed,
             validate_output=True,
-            require_wt_for_transforms=False,
+            require_wt_for_transforms=standardization.add_relative_score,
         )
+
+    replace_wt_sequence_provenance(
+        built_table,
+        metadata.wt_sequence_provenance,
+    )
 
     return built_table, _successful_download_summary(
         source="proteingym",
@@ -912,6 +1170,16 @@ def _build_proteingym_download(
         wt_sequence=metadata.wt_sequence,
         raw_rows=len(experiment_table),
         built_table=built_table,
+        requested_transformation=(
+            standardization.relative_method
+            if standardization.add_relative_score
+            else None
+        ),
+        transformed_output_column=(
+            standardization.relative_output_col
+            if standardization.add_relative_score
+            else None
+        ),
     )
 
 
@@ -922,6 +1190,7 @@ def _download_mavedb_dataset(
     refresh: bool,
     drop_failed: bool,
     add_wildtype_row: bool,
+    standardization: _StandardizationOptions,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Acquire one MaveDB score set from the API and build it."""
     acquired = _acquire_mavedb_api_dataset(
@@ -934,6 +1203,7 @@ def _download_mavedb_dataset(
         acquired,
         drop_failed=drop_failed,
         add_wildtype_row=add_wildtype_row,
+        standardization=standardization,
     )
 
 
@@ -946,6 +1216,7 @@ def _download_mavedb_snapshot_dataset(
     drop_failed: bool,
     add_wildtype_row: bool,
     include_superseded: bool,
+    standardization: _StandardizationOptions,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Acquire one MaveDB score set from a cached snapshot and build it."""
     acquisition = acquire_cached_mavedb_snapshot_datasets(
@@ -962,6 +1233,7 @@ def _download_mavedb_snapshot_dataset(
         _snapshot_download_input(acquisition.datasets[0]),
         drop_failed=drop_failed,
         add_wildtype_row=add_wildtype_row,
+        standardization=standardization,
     )
 
 
@@ -972,8 +1244,11 @@ def _acquire_mavedb_api_dataset(
     refresh: bool,
 ) -> _MaveDBDownloadInput:
     """Return API metadata and score-table inputs without building them."""
-    metadata_record = _get_mavedb_download_metadata(dataset_id)
-    metadata = metadata_record.raw_metadata
+    metadata = _acquire_mavedb_api_metadata(
+        dataset_id,
+        cache=cache,
+        refresh=refresh,
+    )
     encoded_id = quote(dataset_id, safe=":")
     scores_url = (
         f"{MAVEDB_API_URL.rstrip('/')}/score-sets/{encoded_id}/scores"
@@ -989,6 +1264,95 @@ def _acquire_mavedb_api_dataset(
         metadata=metadata,
         provenance={},
     )
+
+
+def _acquire_mavedb_api_metadata(
+    dataset_id: str,
+    *,
+    cache: FilesystemCache,
+    refresh: bool,
+) -> dict[str, Any]:
+    """Resolve deterministic MaveDB score-set metadata through the cache."""
+    encoded_id = quote(dataset_id, safe=":")
+    metadata_url = f"{MAVEDB_API_URL.rstrip('/')}/score-sets/{encoded_id}"
+    metadata_path = cache.resolve(
+        _MAVEDB_METADATA_CACHE_SOURCE,
+        dataset_id,
+        refresh=refresh,
+    )
+    if metadata_path is None:
+        metadata_record = _get_mavedb_download_metadata(dataset_id)
+        _, serialized = _validated_mavedb_metadata_payload(
+            metadata_record.raw_metadata,
+            dataset_id,
+        )
+        metadata_path = cache.store_bytes(
+            _MAVEDB_METADATA_CACHE_SOURCE,
+            dataset_id,
+            metadata_url,
+            serialized,
+            refresh=refresh,
+        )
+
+    try:
+        values = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise InvalidDatasetError(
+            f"Cached MaveDB metadata for {dataset_id!r} is invalid: {exc}"
+        ) from exc
+    return _validate_mavedb_metadata(values, dataset_id, cached=True)
+
+
+def _validated_mavedb_metadata_payload(
+    values: Any,
+    dataset_id: str,
+) -> tuple[dict[str, Any], bytes]:
+    """Validate and serialize fresh MaveDB metadata before cache replacement."""
+    metadata = _validate_mavedb_metadata(values, dataset_id, cached=False)
+    try:
+        serialized = (
+            json.dumps(
+                metadata,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise InvalidDatasetError(
+            f"MaveDB metadata for {dataset_id!r} cannot be serialized: {exc}"
+        ) from exc
+    return metadata, serialized
+
+
+def _validate_mavedb_metadata(
+    values: Any,
+    dataset_id: str,
+    *,
+    cached: bool,
+) -> dict[str, Any]:
+    """Validate source-derived MaveDB metadata without using user fallbacks."""
+    description = "Cached MaveDB metadata" if cached else "MaveDB metadata"
+    if not isinstance(values, Mapping):
+        raise InvalidDatasetError(
+            f"{description} for {dataset_id!r} must be a JSON object."
+        )
+    metadata = normalize_raw_metadata(values)
+    if not isinstance(metadata, Mapping):
+        raise InvalidDatasetError(
+            f"Normalized {description.lower()} for {dataset_id!r} must be "
+            "a JSON object."
+        )
+    metadata = dict(metadata)
+    if metadata.get("urn") != dataset_id:
+        raise InvalidDatasetError(
+            f"{description} does not match {dataset_id!r}."
+        )
+    evidence = _mavedb_wt_sequence_evidence(metadata)
+    if evidence:
+        resolve_wt_sequence(evidence, None, dataset_id=dataset_id)
+    return metadata
 
 
 def _snapshot_download_input(
@@ -1008,14 +1372,17 @@ def _build_mavedb_download(
     *,
     drop_failed: bool,
     add_wildtype_row: bool,
+    standardization: _StandardizationOptions,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Build API or snapshot inputs through the existing MaveDB builder."""
     metadata = acquired.metadata
-    wt_sequence = _extract_wt_from_metadata(metadata)
-    if wt_sequence is None:
-        raise MissingWildTypeError(
-            f"No WT sequence found in MaveDB metadata for {dataset_id}."
-        )
+    wt_sequence, sequence_provenance = resolve_wt_sequence(
+        _mavedb_wt_sequence_evidence(metadata),
+        standardization.wt_sequence,
+        dataset_id=dataset_id,
+    )
+    if sequence_provenance.startswith("mavedb_score_set_metadata:"):
+        sequence_provenance = "mavedb_score_set_metadata"
 
     raw_table = read_table(acquired.scores_path)
     hgvs_col = next(
@@ -1046,13 +1413,20 @@ def _build_mavedb_download(
         gene=gene,
         uniprot_id=uniprot_id,
         wt_sequence=wt_sequence,
-        add_relative_score=False,
-        add_binary_label=False,
+        wt_score=standardization.wt_score,
+        add_relative_score=standardization.add_relative_score,
+        relative_method=standardization.relative_method,
+        relative_output_col=standardization.relative_output_col,
+        add_binary_label=standardization.add_binary_label,
+        delta=standardization.delta,
+        higher_is_better=standardization.higher_is_better,
+        binary_output_col=standardization.binary_output_col,
         add_wildtype_row=add_wildtype_row,
         drop_failed=drop_failed,
         validate_output=True,
-        require_wt_for_transforms=False,
+        require_wt_for_transforms=standardization.add_relative_score,
     )
+    replace_wt_sequence_provenance(built_table, sequence_provenance)
     summary = _successful_download_summary(
         source="mavedb",
         dataset_id=dataset_id,
@@ -1060,6 +1434,16 @@ def _build_mavedb_download(
         wt_sequence=wt_sequence,
         raw_rows=len(raw_table),
         built_table=built_table,
+        requested_transformation=(
+            standardization.relative_method
+            if standardization.add_relative_score
+            else None
+        ),
+        transformed_output_column=(
+            standardization.relative_output_col
+            if standardization.add_relative_score
+            else None
+        ),
     )
     summary.update(acquired.provenance)
     return built_table, summary
@@ -1085,6 +1469,8 @@ def _successful_download_summary(
     wt_sequence: str,
     raw_rows: int,
     built_table: pd.DataFrame,
+    requested_transformation: str | None,
+    transformed_output_column: str | None,
 ) -> dict[str, Any]:
     """Build the existing successful summary representation for one dataset."""
     return {
@@ -1094,6 +1480,14 @@ def _successful_download_summary(
         "dataset_id": dataset_id,
         "target_protein": target_protein,
         "wt_length": len(wt_sequence),
+        "wt_sequence_sha256": hashlib.sha256(
+            wt_sequence.encode("utf-8")
+        ).hexdigest(),
+        **_wt_summary_fields(
+            built_table,
+            requested_transformation=requested_transformation,
+            transformed_output_column=transformed_output_column,
+        ),
         "raw_rows": raw_rows,
         **_completed_dataset_counts(built_table, raw_rows=raw_rows),
     }
@@ -1222,6 +1616,21 @@ def _batch_summary_record(
         **result_paths,
         "target_protein": summary.get("target_protein"),
         "wt_length": summary.get("wt_length"),
+        "wt_sequence_sha256": summary.get("wt_sequence_sha256"),
+        "wt_sequence_provenance": summary.get("wt_sequence_provenance"),
+        "wt_score": summary.get("wt_score"),
+        "wt_score_provenance": summary.get("wt_score_provenance"),
+        "observed_wildtype_row": summary.get("observed_wildtype_row"),
+        "synthetic_wildtype_inserted": summary.get(
+            "synthetic_wildtype_inserted"
+        ),
+        "requested_transformation": summary.get("requested_transformation"),
+        "transformed_output_column": summary.get(
+            "transformed_output_column"
+        ),
+        "wt_score_unavailable_reason": summary.get(
+            "wt_score_unavailable_reason"
+        ),
         "raw_rows": summary.get("raw_rows"),
         "validated_rows": summary.get("validated_rows"),
         "discarded_rows": summary.get("discarded_rows"),
