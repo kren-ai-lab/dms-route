@@ -1,0 +1,264 @@
+# Canonical reference for `dms-parser run --config`.
+# The active entries below form one valid configuration.
+# Commented alternatives demonstrate other supported values; when a comment
+# identifies an incompatibility, disable the active value before enabling it.
+# Runtime-only controls are documented by `dms-parser run --help`.
+# Source scores remain unchanged in `score_raw` unless transformations are
+# explicitly enabled.
+
+# Configure ProteinGym processing.
+# Optional mapping. Omit the whole section to skip ProteinGym.
+proteingym:
+  # Select the logical ProteinGym resource.
+  # Required string. No default. The only processable value is
+  # "dms_substitutions"; registered indel and clinical resources are rejected.
+  resource: dms_substitutions
+
+  # Set the base directory for downloaded raw data and processed CSV files.
+  # Required string or path-like value. No default. Relative paths are resolved
+  # from the process working directory.
+  dir_base: datasets/proteingym
+
+  # Set builder options inherited by every ProteinGym dataset below.
+  # Optional mapping. Defaults to an empty mapping. Per-dataset build_kwargs are
+  # deep-merged over these values.
+  default_build_kwargs:
+    # Select the source column copied numerically into score_raw.
+    # Optional string. The pipeline defaults to "DMS_score".
+    # This mapping does not transform or reinterpret the source score.
+    score_col: DMS_score
+
+    # Select the source column containing ProteinGym mutation strings.
+    # Optional string. The pipeline defaults to "mutant".
+    variant_col: mutant
+
+    # Choose whether invalid mutation tokens abort strict auxiliary parsing.
+    # Optional boolean. Defaults to false.
+    strict_variant_parsing: false
+
+    # Override source-table delimiter detection.
+    # Optional string or null. Defaults to null, which selects by file suffix.
+    # A non-null delimiter must match the table produced by the source adapter.
+    sep: null
+
+    # Provide a fallback WT FASTA path to the builder.
+    # Optional string, path-like value, or null. Defaults to null. In this
+    # pipeline it has no effect because source-derived wt_sequence takes priority.
+    wt_fasta_path: null
+
+    # Interpret the source-derived WT sequence as DNA and translate it.
+    # Optional boolean. Defaults to false. ProteinGym supplies protein sequences,
+    # so enabling this is normally inappropriate.
+    wt_sequence_is_dna: false
+
+    # Select the one-based DNA translation frame.
+    # Optional integer. Defaults to 1. Supported values: 1, 2, and 3.
+    # Used only when wt_sequence_is_dna is true.
+    dna_frame: 1
+    # dna_frame: 2
+    # dna_frame: 3
+
+    # Stop DNA translation at the first stop codon.
+    # Optional boolean. Defaults to true. Used only when wt_sequence_is_dna is
+    # true.
+    stop_at_stop: true
+
+    # Generate a WT-relative score column.
+    # Optional boolean. Defaults to false. Enabling it requires a valid numeric
+    # observed WT score; a scoreless synthetic WT row is not sufficient.
+    add_relative_score: false
+
+    # Select the WT-relative calculation.
+    # Optional string. Defaults to "log_ratio". Supported values: "ratio",
+    # "log_ratio", "log2_ratio", and "difference".
+    # Used only when add_relative_score is true.
+    relative_method: log_ratio
+    # relative_method: ratio
+    # relative_method: log2_ratio
+    # relative_method: difference
+
+    # Name the generated WT-relative score column.
+    # Optional string. Defaults to "score_log_ratio". Used only when
+    # add_relative_score is true.
+    relative_output_col: score_log_ratio
+
+    # Generate threshold-based pseudo-binary labels from the relative score.
+    # Optional boolean. Defaults to false. Setting true requires
+    # add_relative_score: true.
+    add_binary_label: false
+
+    # Set the symmetric threshold around zero for pseudo-binary labels.
+    # Optional number. Defaults to 0.1. Values strictly above +delta and below
+    # -delta are non-neutral; both boundary values are neutral. No range is
+    # enforced, so use a non-negative value for the intended neutral interval.
+    delta: 0.1
+
+    # Define the favorable score direction for pseudo-binary labels.
+    # Optional boolean. Defaults to true. When false, the positive and negative
+    # non-neutral class assignments are reversed.
+    higher_is_better: true
+    # higher_is_better: false
+
+    # Name the generated pseudo-binary label column.
+    # Optional string. Defaults to "score_binary_like". Used only when
+    # add_binary_label is true; neutral rows receive label 999.
+    binary_output_col: score_binary_like
+
+    # Prepend a scoreless synthetic WT row when no valid observed WT row exists.
+    # Optional boolean. Defaults to false. Synthetic rows have is_synthetic true
+    # and never infer or alter score_raw.
+    add_wildtype_row: false
+
+    # Remove rows that could not be standardized.
+    # Optional boolean. Defaults to false. When true, only rows with status "OK"
+    # are retained; false preserves Error and Unsupported rows for traceability.
+    drop_failed: false
+
+    # Run final standardized-dataset and sequence-length validation.
+    # Optional boolean. Defaults to true. Disabling this skips integrity checks.
+    validate_output: true
+
+    # Fail when requested WT-relative transforms lack a numeric observed WT score.
+    # Optional boolean. Defaults to false. When false, the requested relative and
+    # binary transformations are skipped with a warning instead.
+    require_wt_for_transforms: false
+
+  # List ProteinGym assays to process independently.
+  # Required non-empty list. No default. Duplicate identifiers are rejected.
+  datasets:
+    # Select one canonical ProteinGym DMS_id.
+    # Required non-empty string. No default. Do not append ".csv".
+    - dataset_id: BLAT_ECOLX_Jacquier_2013
+      # Override source-level builder defaults for this dataset.
+      # Optional mapping. Defaults to an empty mapping. Pipeline-owned input,
+      # WT, dataset, protein, gene, and UniProt values cannot be overridden here.
+      build_kwargs: {}
+
+# Configure MaveDB processing through the live score-set API.
+# Optional mapping. Omit the whole section to skip MaveDB. Snapshot acquisition
+# is not part of the configurable YAML pipeline.
+mavedb:
+  # Set the base directory for downloaded raw data and processed CSV files.
+  # Required string or path-like value. No default. Relative paths are resolved
+  # from the process working directory.
+  dir_base: datasets/mavedb
+
+  # Set builder options inherited by every MaveDB dataset below.
+  # Optional mapping. Defaults to an empty mapping. Per-dataset build_kwargs are
+  # deep-merged over these values.
+  default_build_kwargs:
+    # Override source-table delimiter detection.
+    # Optional string or null. Defaults to null, which selects by file suffix.
+    # A non-null delimiter must match the table produced by the source adapter.
+    sep: null
+
+    # Provide a fallback WT FASTA path to the builder.
+    # Optional string, path-like value, or null. Defaults to null. In this
+    # pipeline it has no effect because source-derived wt_sequence takes priority.
+    wt_fasta_path: null
+
+    # Interpret the source-derived WT sequence as DNA and translate it.
+    # Optional boolean. Defaults to false. MaveDB supplies protein target
+    # sequences here, so enabling this is normally inappropriate.
+    wt_sequence_is_dna: false
+
+    # Select the one-based DNA translation frame.
+    # Optional integer. Defaults to 1. Supported values: 1, 2, and 3.
+    # Used only when wt_sequence_is_dna is true.
+    dna_frame: 1
+    # dna_frame: 2
+    # dna_frame: 3
+
+    # Stop DNA translation at the first stop codon.
+    # Optional boolean. Defaults to true. Used only when wt_sequence_is_dna is
+    # true.
+    stop_at_stop: true
+
+    # Generate a WT-relative score column.
+    # Optional boolean. Defaults to false. Enabling it requires a valid numeric
+    # observed WT score; a scoreless synthetic WT row is not sufficient.
+    add_relative_score: false
+
+    # Select the WT-relative calculation.
+    # Optional string. Defaults to "log_ratio". Supported values: "ratio",
+    # "log_ratio", "log2_ratio", and "difference".
+    # Used only when add_relative_score is true.
+    relative_method: log_ratio
+    # relative_method: ratio
+    # relative_method: log2_ratio
+    # relative_method: difference
+
+    # Name the generated WT-relative score column.
+    # Optional string. Defaults to "score_log_ratio". Used only when
+    # add_relative_score is true.
+    relative_output_col: score_log_ratio
+
+    # Generate threshold-based pseudo-binary labels from the relative score.
+    # Optional boolean. Defaults to false. Setting true requires
+    # add_relative_score: true.
+    add_binary_label: false
+
+    # Set the symmetric threshold around zero for pseudo-binary labels.
+    # Optional number. Defaults to 0.1. Values strictly above +delta and below
+    # -delta are non-neutral; both boundary values are neutral. No range is
+    # enforced, so use a non-negative value for the intended neutral interval.
+    delta: 0.1
+
+    # Define the favorable score direction for pseudo-binary labels.
+    # Optional boolean. Defaults to true. When false, the positive and negative
+    # non-neutral class assignments are reversed.
+    higher_is_better: true
+    # higher_is_better: false
+
+    # Name the generated pseudo-binary label column.
+    # Optional string. Defaults to "score_binary_like". Used only when
+    # add_binary_label is true; neutral rows receive label 999.
+    binary_output_col: score_binary_like
+
+    # Prepend a scoreless synthetic WT row when no valid observed WT row exists.
+    # Optional boolean. Defaults to false. Synthetic rows have is_synthetic true
+    # and never infer or alter score_raw.
+    add_wildtype_row: false
+
+    # Remove rows that could not be standardized.
+    # Optional boolean. Defaults to false. When true, only rows with status "OK"
+    # are retained; false preserves Error and Unsupported rows for traceability.
+    drop_failed: false
+
+    # Run final standardized-dataset and sequence-length validation.
+    # Optional boolean. Defaults to true. Disabling this skips integrity checks.
+    validate_output: true
+
+    # Fail when requested WT-relative transforms lack a numeric observed WT score.
+    # Optional boolean. Defaults to false. When false, the requested relative and
+    # binary transformations are skipped with a warning instead.
+    require_wt_for_transforms: false
+
+  # List MaveDB score sets to process independently.
+  # Required non-empty list. No default. Duplicate identifiers are rejected.
+  datasets:
+    # Select one permanent MaveDB score-set URN.
+    # Required string. No default. Format:
+    # urn:mavedb:########-(lowercase letters or 0)-(positive integer).
+    - dataset_id: urn:mavedb:00000001-a-4
+      # Select the source column containing protein-level HGVS variants.
+      # Optional string. When omitted, only "hgvs_pro" is auto-detected.
+      # The current builder supports substitutions and complete-target identity;
+      # protein indels, frameshifts, and counts tables are not processed.
+      hgvs_col: hgvs_pro
+      # Select the source column copied numerically into score_raw.
+      # Optional string. When omitted, the first available column among "score",
+      # "DMS_score", and "fitness" is used, in that order.
+      score_col: score
+      # Override source-level builder defaults for this dataset.
+      # Optional mapping. Defaults to an empty mapping. score_col and hgvs_col
+      # belong at this dataset level; pipeline-owned metadata cannot be overridden.
+      build_kwargs: {}
+
+# Configure combined run-summary output.
+# Optional mapping. Defaults to an empty mapping.
+output:
+  # Set the directory for timestamped combined CSV and JSON summaries.
+  # Optional string or path-like value. Defaults to "datasets/summaries".
+  # Relative paths are resolved from the process working directory.
+  summary_dir: datasets/summaries

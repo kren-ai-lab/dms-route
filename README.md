@@ -588,6 +588,12 @@ Run every source in the example configuration:
 dms-parser run --config examples/pipeline.yml
 ```
 
+[`examples/config.reference.yml`](examples/config.reference.yml) is the
+canonical commented YAML reference. Its active values form a valid
+configuration, and commented alternatives document other supported values.
+Runtime controls such as `--dry-run`, `--only`, and `--log-level` remain in
+`dms-parser run --help` rather than the YAML schema.
+
 Use `--only proteingym` or `--only mavedb` to select one source. Use
 `--dry-run` to validate the configuration and resolve source metadata without
 downloading score tables or writing processed datasets.

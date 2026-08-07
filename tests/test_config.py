@@ -191,6 +191,52 @@ def test_validation_performs_no_io_or_directory_creation(
     assert not output_root.exists()
 
 
+def test_reference_config_loads_and_validates_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference_path = (
+        Path(__file__).parents[1] / "examples" / "config.reference.yml"
+    )
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Reference configuration attempted network access.")
+
+    monkeypatch.setattr(pipeline_module.requests, "get", forbidden)
+    monkeypatch.setattr(pipeline_module, "download_file", forbidden)
+
+    assert reference_path.is_file()
+    config = load_pipeline_config(reference_path)
+    assert validate_pipeline_config(config) is config
+    assert set(config) == {"proteingym", "mavedb", "output"}
+    assert isinstance(config["proteingym"], dict)
+    assert isinstance(config["mavedb"], dict)
+    assert isinstance(config["output"], dict)
+
+
+def test_reference_config_preserves_source_contracts_and_transform_defaults() -> None:
+    reference_path = (
+        Path(__file__).parents[1] / "examples" / "config.reference.yml"
+    )
+    config = load_pipeline_config(reference_path)
+
+    proteingym = config["proteingym"]
+    mavedb = config["mavedb"]
+    assert proteingym["resource"] == "dms_substitutions"
+    assert proteingym["datasets"][0]["dataset_id"] == (
+        "BLAT_ECOLX_Jacquier_2013"
+    )
+    assert mavedb["datasets"][0]["dataset_id"] == "urn:mavedb:00000001-a-4"
+    assert mavedb["datasets"][0]["hgvs_col"] == "hgvs_pro"
+    assert mavedb["datasets"][0]["score_col"] == "score"
+
+    for source in (proteingym, mavedb):
+        defaults = source["default_build_kwargs"]
+        assert defaults["add_relative_score"] is False
+        assert defaults["add_binary_label"] is False
+        assert defaults["add_wildtype_row"] is False
+        assert defaults["drop_failed"] is False
+
+
 def test_installed_package_sources_do_not_import_examples() -> None:
     source_root = Path(__file__).parents[1] / "src" / "dms_parser"
     violations: list[str] = []
