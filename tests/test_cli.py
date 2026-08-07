@@ -28,6 +28,7 @@ from dms_parser import (
     PipelineResult,
 )
 from dms_parser.exceptions import (
+    CacheInventoryError,
     CatalogError,
     DatasetNotFoundError,
     InvalidCacheEntryError,
@@ -70,6 +71,7 @@ HELP_CASES = (
             ["--help"],
             (
                 "run",
+                "cache",
                 "list",
                 "metadata",
                 "download",
@@ -79,6 +81,10 @@ HELP_CASES = (
             ),
         ),
         (["run", "--help"], ("--config", "WT fallbacks", "--dry-run")),
+        (
+            ["cache", "--help"],
+            ("--cache-dir", "--source", "--dataset-id", "--format"),
+        ),
         (["list", "--help"], ("--source", "--query", "--limit", "--format")),
         (["metadata", "--help"], ("--source", "--dataset-id", "--format")),
         (
@@ -154,6 +160,8 @@ def test_help_exits_successfully() -> None:
         ["unknown"],
         ["run"],
         ["run", "--config", "config.yml", "--only", "invalid"],
+        ["cache", "--format", "yaml"],
+        ["cache", "--source", ""],
         ["list", "--source", "mavedb", "--limit", "0"],
         ["snapshot"],
         [
@@ -196,6 +204,7 @@ def test_invalid_usage_preserves_exit_status(
     [
         [],
         ["run"],
+        ["cache"],
         ["list"],
         ["metadata"],
         ["download"],
@@ -2778,3 +2787,238 @@ def test_pyproject_declares_cli_runtime_dependencies() -> None:
     assert {"pyyaml", "pyarrow", "typer"} <= runtime_names
     assert {"pyyaml", "pyarrow", "typer"}.isdisjoint(dev_names)
     assert "typer>=0.27.1,<0.28" in section_array("project", "dependencies")
+
+
+def test_cache_help_performs_no_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> object:
+        raise AssertionError("cache inventory must not run for help")
+
+    monkeypatch.setattr(cli_module, "inventory_cache", fail)
+
+    result = RUNNER.invoke(cli_module.app, ["cache", "--help"])
+
+    assert result.exit_code == 0
+    assert "Inspect artifacts in the local DMS Parser cache" in result.stdout
+    assert "--verify" not in result.stdout
+    assert "--refresh" not in result.stdout
+    assert "--output" not in result.stdout
+    assert result.stderr == ""
+
+
+def test_empty_cache_text_output_is_successful_and_read_only(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "missing-cache"
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        ["cache", "--cache-dir", str(root)],
+    )
+
+    assert result.exit_code == 0
+    assert result.stderr == ""
+    assert f"cache_root: {root}" in result.stdout
+    assert "entries:\n  (none)" in result.stdout
+    assert "issues:\n  (none)" in result.stdout
+    assert "entry_count: 0" in result.stdout
+    assert "artifact_count: 0" in result.stdout
+    assert "total_size_bytes: 0" in result.stdout
+    assert "complete_entry_count: 0" in result.stdout
+    assert "invalid_entry_count: 0" in result.stdout
+    assert "issue_count: 0" in result.stdout
+    assert not root.exists()
+
+
+def test_empty_cache_json_output_is_deterministic(tmp_path: Path) -> None:
+    root = tmp_path / "cache"
+
+    first = RUNNER.invoke(
+        cli_module.app,
+        ["cache", "--cache-dir", str(root), "--format", "json"],
+    )
+    second = RUNNER.invoke(
+        cli_module.app,
+        ["cache", "--cache-dir", str(root), "--format", "json"],
+    )
+
+    assert first.exit_code == 0
+    assert first.stdout == second.stdout
+    assert first.stderr == second.stderr == ""
+    assert json.loads(first.stdout) == {
+        "cache_root": str(root),
+        "entries": [],
+        "issues": [],
+        "summary": {
+            "entry_count": 0,
+            "artifact_count": 0,
+            "total_size_bytes": 0,
+            "complete_entry_count": 0,
+            "invalid_entry_count": 0,
+            "issue_count": 0,
+        },
+    }
+    assert not root.exists()
+
+
+def test_cache_json_exposes_payloads_filters_and_null_values(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cache"
+    cache = FilesystemCache(root)
+    artifact = cache.store_bytes(
+        "proteingym",
+        "reference-files-dms-substitutions",
+        "https://example.test/reference.csv",
+        b"payload",
+    )
+    cache.store_bytes(
+        "other",
+        "dataset",
+        "https://example.test/other.bin",
+        b"other",
+    )
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "cache",
+            "--cache-dir",
+            str(root),
+            "--source",
+            "proteingym",
+            "--dataset-id",
+            "reference-files-dms-substitutions",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stderr == ""
+    values = json.loads(result.stdout)
+    assert values["entries"] == [
+        {
+            "representation": "generic",
+            "source": "proteingym",
+            "dataset_id": "reference-files-dms-substitutions",
+            "snapshot_record_id": None,
+            "state": "structurally_complete",
+            "artifact_count": 1,
+            "size_bytes": 7,
+            "artifacts": [
+                {
+                    "role": "artifact",
+                    "path": str(artifact),
+                    "size_bytes": 7,
+                }
+            ],
+            "error": None,
+        }
+    ]
+    assert values["summary"] == {
+        "entry_count": 1,
+        "artifact_count": 1,
+        "total_size_bytes": 7,
+        "complete_entry_count": 1,
+        "invalid_entry_count": 0,
+        "issue_count": 0,
+    }
+
+
+def test_cache_invalid_and_incomplete_content_is_successful(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cache"
+    cache = FilesystemCache(root)
+    artifact = cache.store_bytes(
+        "source",
+        "dataset",
+        "https://example.test/file.bin",
+        b"payload",
+    )
+    artifact.unlink()
+    incomplete = cache.entry_path("other", "missing")
+    incomplete.mkdir(parents=True)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        ["cache", "--cache-dir", str(root)],
+    )
+
+    assert result.exit_code == 0
+    assert result.stderr == ""
+    assert "state: invalid" in result.stdout
+    assert "state: incomplete" in result.stdout
+    assert "invalid_entry_count: 1" in result.stdout
+    assert "issue_count: 1" in result.stdout
+
+
+def test_cache_operational_error_returns_one_and_uses_stderr_logging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> object:
+        raise CacheInventoryError("inventory unavailable")
+
+    monkeypatch.setattr(cli_module, "inventory_cache", fail)
+    caplog.set_level(logging.ERROR)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        ["cache", "--cache-dir", str(tmp_path / "cache")],
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert any(
+        record.getMessage()
+        == "Cache inventory failed: inventory unavailable"
+        for record in caplog.records
+    )
+
+
+def test_cache_expands_explicit_root_and_forwards_exact_filters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_inventory(
+        cache: FilesystemCache,
+        *,
+        source: str | None,
+        dataset_id: str | None,
+    ) -> object:
+        captured.update(
+            cache=cache,
+            source=source,
+            dataset_id=dataset_id,
+        )
+        from dms_parser import CacheInventoryResult
+
+        return CacheInventoryResult(entries=(), issues=())
+
+    monkeypatch.setattr(cli_module, "inventory_cache", fake_inventory)
+    supplied = Path("~") / tmp_path.name / "cache"
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "cache",
+            "--cache-dir",
+            str(supplied),
+            "--source",
+            "MaveDB",
+            "--dataset-id",
+            "URN",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert isinstance(captured["cache"], FilesystemCache)
+    assert captured["cache"].root == supplied.expanduser()  # type: ignore[union-attr]
+    assert captured["source"] == "MaveDB"
+    assert captured["dataset_id"] == "URN"

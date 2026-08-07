@@ -18,6 +18,12 @@ import requests
 import typer
 
 from dms_parser.cache import FilesystemCache
+from dms_parser.cache_inventory import (
+    CacheInventoryArtifact,
+    CacheInventoryEntry,
+    CacheInventoryResult,
+    inventory_cache,
+)
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
 from dms_parser.config import load_pipeline_config, validate_source_dataset_id
 from dms_parser.downloads import (
@@ -29,6 +35,7 @@ from dms_parser.downloads import (
     download_and_standardize_datasets,
 )
 from dms_parser.exceptions import (
+    CacheInventoryError,
     DMSParserError,
     InvalidPipelineOptionError,
     MaveDBSnapshotTableError,
@@ -183,6 +190,13 @@ def _non_empty_dataset_id(value: str) -> str:
     """Reject empty dataset identifiers while preserving the supplied value."""
     if not value.strip():
         raise typer.BadParameter("must be a non-empty dataset identifier")
+    return value
+
+
+def _non_empty_source(value: str) -> str:
+    """Reject empty cache source filters while preserving their casing."""
+    if not value.strip():
+        raise typer.BadParameter("must be a non-empty source")
     return value
 
 
@@ -357,6 +371,68 @@ def _run_command(
 
     result = run_pipeline(config, only=only.value, dry_run=dry_run)
     _finish(result.exit_code)
+
+
+@app.command(
+    "cache",
+    help="Inspect artifacts in the local DMS Parser cache without modifying them.",
+    context_settings=_HELP_CONTEXT,
+)
+def _cache_command(
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            parser=_non_empty_path,
+            metavar="PATH",
+        ),
+    ] = None,
+    source: Annotated[
+        str | None,
+        typer.Option(
+            "--source",
+            parser=_non_empty_source,
+            metavar="TEXT",
+        ),
+    ] = None,
+    dataset_id: Annotated[
+        str | None,
+        typer.Option(
+            "--dataset-id",
+            parser=_non_empty_dataset_id,
+            metavar="TEXT",
+        ),
+    ] = None,
+    output_format: Annotated[
+        _OutputFormat,
+        typer.Option("--format"),
+    ] = _OutputFormat.text,
+    log_level: Annotated[
+        _LogLevel,
+        typer.Option(
+            "--log-level",
+            help="Set the process logging level (default: INFO).",
+        ),
+    ] = _LogLevel.info,
+) -> None:
+    """Inspect managed cache artifacts without changing filesystem state."""
+    _start_command(log_level)
+    cache = FilesystemCache(_cache_root(cache_dir))
+    try:
+        result = inventory_cache(
+            cache,
+            source=source,
+            dataset_id=dataset_id,
+        )
+    except CacheInventoryError as exc:
+        logger.error("Cache inventory failed: %s", exc)
+        raise typer.Exit(1) from None
+    rendered = (
+        _render_cache_inventory_text(cache.root, result)
+        if output_format is _OutputFormat.text
+        else _render_json(_cache_inventory_values(cache.root, result))
+    )
+    sys.stdout.write(rendered)
 
 
 @app.command(
@@ -1249,6 +1325,76 @@ def _snapshot_values(snapshot: MaveDBSnapshot) -> dict[str, Any]:
     }
 
 
+def _cache_inventory_artifact_values(
+    artifact: CacheInventoryArtifact,
+) -> dict[str, Any]:
+    """Serialize one present cache payload."""
+    return {
+        "role": artifact.role,
+        "path": str(artifact.path),
+        "size_bytes": artifact.size_bytes,
+    }
+
+
+def _cache_inventory_entry_values(
+    entry: CacheInventoryEntry,
+) -> dict[str, Any]:
+    """Serialize one cache inventory entry with aggregate payload fields."""
+    return {
+        "representation": entry.representation,
+        "source": entry.source,
+        "dataset_id": entry.dataset_id,
+        "snapshot_record_id": entry.snapshot_record_id,
+        "state": entry.state,
+        "artifact_count": len(entry.artifacts),
+        "size_bytes": sum(
+            artifact.size_bytes for artifact in entry.artifacts
+        ),
+        "artifacts": [
+            _cache_inventory_artifact_values(artifact)
+            for artifact in entry.artifacts
+        ],
+        "error": entry.error,
+    }
+
+
+def _cache_inventory_values(
+    cache_root: Path,
+    result: CacheInventoryResult,
+) -> dict[str, Any]:
+    """Return deterministic machine-readable cache inventory values."""
+    return {
+        "cache_root": str(cache_root),
+        "entries": [
+            _cache_inventory_entry_values(entry)
+            for entry in result.entries
+        ],
+        "issues": [
+            {
+                "path": str(issue.path),
+                "state": issue.state,
+                "error": issue.error,
+            }
+            for issue in result.issues
+        ],
+        "summary": _cache_inventory_summary_values(result),
+    }
+
+
+def _cache_inventory_summary_values(
+    result: CacheInventoryResult,
+) -> dict[str, int]:
+    """Return stable cache inventory aggregate fields."""
+    return {
+        "entry_count": result.entry_count,
+        "artifact_count": result.artifact_count,
+        "total_size_bytes": result.total_size_bytes,
+        "complete_entry_count": result.complete_entry_count,
+        "invalid_entry_count": result.invalid_entry_count,
+        "issue_count": result.issue_count,
+    }
+
+
 def _snapshot_table_values(table: MaveDBSnapshotTable) -> dict[str, Any]:
     """Serialize one extracted raw-table bundle."""
     return {
@@ -1406,6 +1552,63 @@ def _render_snapshot_text(snapshot: MaveDBSnapshot) -> str:
         f"{field}: {_display_value(value)}"
         for field, value in values.items()
     ) + "\n"
+
+
+def _render_cache_inventory_text(
+    cache_root: Path,
+    result: CacheInventoryResult,
+) -> str:
+    """Render cache entries, incomplete objects, and aggregate counts."""
+    lines = [f"cache_root: {cache_root}", "entries:"]
+    if not result.entries:
+        lines.append("  (none)")
+    for entry in result.entries:
+        entry_size = sum(
+            artifact.size_bytes for artifact in entry.artifacts
+        )
+        lines.extend(
+            [
+                f"  - representation: {entry.representation}",
+                f"    source: {entry.source}",
+                f"    dataset_id: {_display_value(entry.dataset_id)}",
+                "    snapshot_record_id: "
+                f"{_display_value(entry.snapshot_record_id)}",
+                f"    state: {entry.state}",
+                f"    artifact_count: {len(entry.artifacts)}",
+                f"    size_bytes: {entry_size}",
+                "    artifacts:",
+            ]
+        )
+        if not entry.artifacts:
+            lines.append("      (none)")
+        for artifact in entry.artifacts:
+            lines.extend(
+                [
+                    f"      - role: {artifact.role}",
+                    f"        path: {artifact.path}",
+                    f"        size_bytes: {artifact.size_bytes}",
+                ]
+            )
+        lines.append(f"    error: {_display_value(entry.error)}")
+
+    lines.append("issues:")
+    if not result.issues:
+        lines.append("  (none)")
+    for issue in result.issues:
+        lines.extend(
+            [
+                f"  - path: {issue.path}",
+                f"    state: {issue.state}",
+                f"    error: {issue.error}",
+            ]
+        )
+
+    lines.append("summary:")
+    lines.extend(
+        f"  {name}: {value}"
+        for name, value in _cache_inventory_summary_values(result).items()
+    )
+    return "\n".join(lines) + "\n"
 
 
 def _render_snapshot_table_text(

@@ -88,6 +88,31 @@ class _ExtractedFile:
     sha256: str
 
 
+@dataclass(frozen=True)
+class _SnapshotTableFileMetadata:
+    """Validated persisted metadata for one extracted CSV."""
+
+    archive_member: str
+    filename: str
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class _SnapshotTableManifest:
+    """Validated persisted metadata for one snapshot-table bundle."""
+
+    source: str
+    record_id: str
+    doi: str
+    concept_doi: str
+    archive: Mapping[str, Any]
+    dataset_id: str
+    is_superseded: bool
+    scores: _SnapshotTableFileMetadata
+    counts: _SnapshotTableFileMetadata | None
+
+
 class _InvalidTableCache(ValueError):
     """Internal signal that a table-cache bundle must be rebuilt."""
 
@@ -340,48 +365,34 @@ def _validate_bundle(
     if not manifest_path.is_file() or manifest_path.is_symlink():
         raise _InvalidTableCache("Manifest is missing or unsafe.")
     with manifest_path.open("r", encoding="utf-8") as handle:
-        manifest = json.load(handle)
-    if not isinstance(manifest, Mapping):
-        raise _InvalidTableCache("Manifest must be a JSON object.")
-    if set(manifest) != {
-        "source",
-        "record_id",
-        "doi",
-        "concept_doi",
-        "archive",
-        "dataset_id",
-        "is_superseded",
-        "files",
-    }:
-        raise _InvalidTableCache("Manifest fields are invalid.")
+        values = json.load(handle)
+    manifest = _snapshot_table_manifest_from_dict(
+        values,
+        expected_record_id=snapshot.record.record_id,
+        expected_dataset_id=expected.dataset_id,
+    )
     record = snapshot.record
     if (
-        manifest["source"] != "mavedb_snapshot"
-        or manifest["record_id"] != record.record_id
-        or manifest["doi"] != record.doi
-        or manifest["concept_doi"] != record.concept_doi
-        or manifest["dataset_id"] != expected.dataset_id
-        or manifest["is_superseded"] is not expected.is_superseded
+        manifest.doi != record.doi
+        or manifest.concept_doi != record.concept_doi
+        or manifest.is_superseded is not expected.is_superseded
     ):
         raise _InvalidTableCache("Manifest provenance is inconsistent.")
-    if manifest["archive"] != {
+    if manifest.archive != {
         "filename": record.filename,
         "size": record.size,
         "checksum": record.checksum,
     }:
         raise _InvalidTableCache("Manifest archive provenance is inconsistent.")
-    files = manifest["files"]
-    if not isinstance(files, Mapping) or set(files) != {"scores", "counts"}:
-        raise _InvalidTableCache("Manifest file metadata is invalid.")
 
     scores_path = entry / _SCORES_FILENAME
     _validate_cached_file(
         scores_path,
-        files["scores"],
+        manifest.scores,
         archive_member=expected.scores_member,
         filename=_SCORES_FILENAME,
     )
-    counts_metadata = files["counts"]
+    counts_metadata = manifest.counts
     counts_path: Path | None = None
     if counts_metadata is None:
         if (entry / _COUNTS_FILENAME).exists():
@@ -407,24 +418,149 @@ def _validate_bundle(
 
 def _validate_cached_file(
     path: Path,
-    metadata: object,
+    metadata: _SnapshotTableFileMetadata,
     *,
     archive_member: str,
     filename: str,
 ) -> None:
     """Validate one regular cached CSV against deterministic metadata."""
-    if not isinstance(metadata, Mapping) or set(metadata) != {
+    if (
+        metadata.archive_member != archive_member
+        or metadata.filename != filename
+    ):
+        raise _InvalidTableCache("Cached file metadata is inconsistent.")
+    if not path.is_file() or path.is_symlink():
+        raise _InvalidTableCache("Cached file is missing or unsafe.")
+    if path.stat().st_size != metadata.size:
+        raise _InvalidTableCache("Cached file size is inconsistent.")
+    if _sha256_file(path) != metadata.sha256:
+        raise _InvalidTableCache("Cached file checksum is inconsistent.")
+
+
+def _snapshot_table_manifest_from_dict(
+    values: object,
+    *,
+    expected_record_id: str,
+    expected_dataset_id: str | None = None,
+) -> _SnapshotTableManifest:
+    """Validate persisted snapshot-table metadata without reading payloads."""
+    from dms_parser.config import validate_source_dataset_id
+
+    if not isinstance(values, Mapping):
+        raise _InvalidTableCache("Manifest must be a JSON object.")
+    if set(values) != {
+        "source",
+        "record_id",
+        "doi",
+        "concept_doi",
+        "archive",
+        "dataset_id",
+        "is_superseded",
+        "files",
+    }:
+        raise _InvalidTableCache("Manifest fields are invalid.")
+    source = values["source"]
+    record_id = values["record_id"]
+    dataset_id = values["dataset_id"]
+    doi = values["doi"]
+    concept_doi = values["concept_doi"]
+    is_superseded = values["is_superseded"]
+    if source != "mavedb_snapshot":
+        raise _InvalidTableCache("Manifest source is invalid.")
+    if record_id != expected_record_id:
+        raise _InvalidTableCache("Manifest record ID is inconsistent.")
+    if (
+        not isinstance(dataset_id, str)
+        or not dataset_id.strip()
+        or (
+            expected_dataset_id is not None
+            and dataset_id != expected_dataset_id
+        )
+    ):
+        raise _InvalidTableCache("Manifest dataset ID is invalid.")
+    try:
+        validate_source_dataset_id("mavedb", dataset_id)
+    except SourceConfigurationError as exc:
+        raise _InvalidTableCache("Manifest dataset ID is invalid.") from exc
+    if not isinstance(doi, str) or not doi.strip():
+        raise _InvalidTableCache("Manifest DOI is invalid.")
+    if not isinstance(concept_doi, str) or not concept_doi.strip():
+        raise _InvalidTableCache("Manifest concept DOI is invalid.")
+    if concept_doi.casefold() != MAVEDB_ZENODO_CONCEPT_DOI.casefold():
+        raise _InvalidTableCache("Manifest concept DOI is invalid.")
+    if not isinstance(is_superseded, bool):
+        raise _InvalidTableCache("Manifest superseded state is invalid.")
+
+    archive = values["archive"]
+    if not isinstance(archive, Mapping) or set(archive) != {
+        "filename",
+        "size",
+        "checksum",
+    }:
+        raise _InvalidTableCache("Manifest archive provenance is invalid.")
+    if (
+        not isinstance(archive["filename"], str)
+        or not archive["filename"].strip()
+        or isinstance(archive["size"], bool)
+        or not isinstance(archive["size"], int)
+        or archive["size"] <= 0
+        or not isinstance(archive["checksum"], str)
+        or not archive["checksum"].strip()
+    ):
+        raise _InvalidTableCache("Manifest archive provenance is invalid.")
+    try:
+        _validate_safe_filename(archive["filename"])
+        normalized_checksum = _normalize_checksum(archive["checksum"])
+    except MaveDBSnapshotError as exc:
+        raise _InvalidTableCache(
+            "Manifest archive provenance is invalid."
+        ) from exc
+    if archive["checksum"] != normalized_checksum:
+        raise _InvalidTableCache("Manifest archive provenance is invalid.")
+
+    files = values["files"]
+    if not isinstance(files, Mapping) or set(files) != {"scores", "counts"}:
+        raise _InvalidTableCache("Manifest file metadata is invalid.")
+    scores = _snapshot_table_file_metadata(files["scores"])
+    counts = (
+        _snapshot_table_file_metadata(files["counts"])
+        if files["counts"] is not None
+        else None
+    )
+    return _SnapshotTableManifest(
+        source=source,
+        record_id=record_id,
+        doi=doi,
+        concept_doi=concept_doi,
+        archive=dict(archive),
+        dataset_id=dataset_id,
+        is_superseded=is_superseded,
+        scores=scores,
+        counts=counts,
+    )
+
+
+def _snapshot_table_file_metadata(
+    values: object,
+) -> _SnapshotTableFileMetadata:
+    """Validate one persisted snapshot-table payload description."""
+    if not isinstance(values, Mapping) or set(values) != {
         "archive_member",
         "filename",
         "size",
         "sha256",
     }:
         raise _InvalidTableCache("Cached file metadata is invalid.")
-    size = metadata["size"]
-    checksum = metadata["sha256"]
+    archive_member = values["archive_member"]
+    filename = values["filename"]
+    size = values["size"]
+    checksum = values["sha256"]
     if (
-        metadata["archive_member"] != archive_member
-        or metadata["filename"] != filename
+        not isinstance(archive_member, str)
+        or not archive_member.strip()
+        or not isinstance(filename, str)
+        or not filename.strip()
+        or Path(filename).name != filename
         or isinstance(size, bool)
         or not isinstance(size, int)
         or size < 0
@@ -432,12 +568,12 @@ def _validate_cached_file(
         or _SHA256_PATTERN.fullmatch(checksum) is None
     ):
         raise _InvalidTableCache("Cached file metadata is inconsistent.")
-    if not path.is_file() or path.is_symlink():
-        raise _InvalidTableCache("Cached file is missing or unsafe.")
-    if path.stat().st_size != size:
-        raise _InvalidTableCache("Cached file size is inconsistent.")
-    if _sha256_file(path) != checksum:
-        raise _InvalidTableCache("Cached file checksum is inconsistent.")
+    return _SnapshotTableFileMetadata(
+        archive_member=archive_member,
+        filename=filename,
+        size=size,
+        sha256=checksum,
+    )
 
 
 def _extract_and_publish(

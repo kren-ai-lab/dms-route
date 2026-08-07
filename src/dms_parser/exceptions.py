@@ -70,6 +70,10 @@ class CacheError(DMSParserError):
     """Base exception for filesystem cache failures."""
 
 
+class CacheInventoryError(CacheError):
+    """Raised when a cache inventory cannot be completed."""
+
+
 class InvalidCacheEntryError(CacheError):
     """Raised when a cached artifact is missing, invalid, or corrupted."""
 

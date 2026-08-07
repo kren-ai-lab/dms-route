@@ -108,6 +108,7 @@ Inspect the installed interface:
 ```bash
 dms-parser --help
 dms-parser run --help
+dms-parser cache --help
 dms-parser list --help
 dms-parser metadata --help
 dms-parser download --help
@@ -146,6 +147,25 @@ metadata API directly and does not accept the cache, refresh, or variant-type
 options. Query semantics differ between the two sources, and `--variant-type`
 applies only to ProteinGym. Use `--format json` for machine-readable output.
 `--output` writes UTF-8 data and overwrites its target.
+
+### Inspect the local cache
+
+Use the read-only cache inventory to inspect managed artifacts without
+refreshing, repairing, deleting, or otherwise changing them:
+
+```powershell
+dms-parser cache
+dms-parser cache --source proteingym
+dms-parser cache --source mavedb_snapshot --dataset-id urn:mavedb:00000001-a-1
+dms-parser cache --format json
+dms-parser cache --cache-dir .\example-cache
+```
+
+The default cache root is `~/.cache/dms-parser`. A `structurally_complete`
+entry has valid persisted metadata, the expected non-symlink regular payload
+files, and matching declared sizes. Inventory does not recalculate checksums
+and does not prove freshness, scientific validity, or future parseability.
+Invalid and incomplete objects are reported but are never repaired or deleted.
 
 ### Managed MaveDB bulk snapshots
 

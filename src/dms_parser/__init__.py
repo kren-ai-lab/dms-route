@@ -6,6 +6,13 @@ import logging
 
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
 from dms_parser.cache import CacheManifest, FilesystemCache
+from dms_parser.cache_inventory import (
+    CacheInventoryArtifact,
+    CacheInventoryEntry,
+    CacheInventoryIssue,
+    CacheInventoryResult,
+    inventory_cache,
+)
 from dms_parser.catalog import DatasetRecord, get_dataset_metadata, list_datasets
 from dms_parser.config import load_pipeline_config, validate_pipeline_config
 from dms_parser.downloads import (
@@ -17,6 +24,7 @@ from dms_parser.downloads import (
 )
 from dms_parser.exceptions import (
     CacheError,
+    CacheInventoryError,
     CatalogError,
     CorruptCacheManifestError,
     DMSParserError,
@@ -158,6 +166,12 @@ __all__ = [
     "DatasetBatchDownloadResult",
     "FilesystemCache",
     "CacheManifest",
+    "CacheInventoryArtifact",
+    "CacheInventoryEntry",
+    "CacheInventoryIssue",
+    "CacheInventoryResult",
+    "CacheInventoryError",
+    "inventory_cache",
     "fetch_to_cache",
     "parse_variant",
     "parse_variant_token",
