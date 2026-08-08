@@ -6,8 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from dms_parser._wildtype import get_wt_resolution, resolve_wt_sequence
-from dms_parser.exceptions import MissingWildTypeError
+from dms_parser._wildtype import get_wt_resolution
 from dms_parser.parsing import translate_dna
 
 
@@ -106,19 +105,6 @@ def _mavedb_target_protein(
     if isinstance(title, str) and title.strip():
         return title.split()[0]
     return "Unknown"
-
-
-def _extract_wt_from_metadata(metadata: dict[str, Any]) -> str | None:
-    """Resolve a MaveDB WT sequence from score-set metadata."""
-    try:
-        sequence, _ = resolve_wt_sequence(
-            _mavedb_wt_sequence_evidence(metadata),
-            None,
-            dataset_id=str(metadata.get("urn", "MaveDB dataset")),
-        )
-    except MissingWildTypeError:
-        return None
-    return sequence
 
 
 def _mavedb_wt_sequence_evidence(
