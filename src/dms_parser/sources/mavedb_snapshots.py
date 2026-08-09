@@ -301,10 +301,19 @@ def _select_archive(files: object) -> dict[str, Any]:
         raise MaveDBSnapshotError(
             "Zenodo archive links must be a JSON object."
         )
-    download_url = optional_text(links.get("content"))
-    if download_url is None or not _is_http_url(download_url):
+    content_url = optional_text(links.get("content"))
+    self_url = optional_text(links.get("self"))
+    download_url = next(
+        (
+            url
+            for url in (content_url, self_url)
+            if url is not None and _is_http_url(url)
+        ),
+        None,
+    )
+    if download_url is None:
         raise MaveDBSnapshotError(
-            "Zenodo archive content URL is unavailable or invalid."
+            "Zenodo archive download URL is unavailable or invalid."
         )
     return {
         "filename": filename,

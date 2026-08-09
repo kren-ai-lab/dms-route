@@ -76,19 +76,27 @@ def _write_cached_snapshot(
     main_path = entry / "main.json"
     main_path.write_bytes(main_bytes)
     archive_path = entry / "mavedb-dump.test.zip"
+    archive_root = "mavedb-dump.2026062418131"
     with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("snapshot/main.json", main_bytes)
+        archive.writestr(f"{archive_root}/main.json", main_bytes)
         for score_set in score_sets:
             stem = score_set["urn"].replace(":", "-")
             archive.writestr(
-                f"csv/{stem}.scores.csv",
-                "hgvs_pro,score,source_note\n"
-                "p.=,1.0,snapshot\n"
-                "p.Met1Ala,0.5,snapshot\n"
-                "p.Gly2del,-1.0,snapshot\n",
+                f"{archive_root}/csv/{stem}.scores.csv",
+                (
+                    "accession,hgvs_nt,hgvs_splice,hgvs_pro,scores.score,"
+                    "scores.sd,scores.se,scores.df\n"
+                    f"{score_set['urn']}#1,c.=,,p.=,1.0,0.1,0.01,10\n"
+                    f"{score_set['urn']}#2,c.1A>G,,p.Met1Ala,0.5,0.2,0.02,20\n"
+                    f"{score_set['urn']}#3,c.4_6del,,p.Gly2del,-1.0,0.3,0.03,30\n"
+                ),
             )
             archive.writestr(
-                f"csv/{stem}.counts.csv",
+                f"{archive_root}/csv/._{stem}.scores.csv",
+                "offline AppleDouble sidecar",
+            )
+            archive.writestr(
+                f"{archive_root}/csv/{stem}.counts.csv",
                 "hgvs_pro,count\np.=,10\n",
             )
     archive_bytes = archive_path.read_bytes()
@@ -121,6 +129,59 @@ def _snapshot_score_set(dataset_id: str, *, gene: str = "GENE") -> dict[str, Any
         "targetGenes": [{"name": gene}],
         "targetSequence": {"sequence": "MKT"},
     }
+
+
+def _build_offline_mavedb_scores(
+    tmp_path: Path,
+    table: str,
+) -> pd.DataFrame:
+    """Build one local MaveDB score table through standard download logic."""
+    dataset_id = "urn:mavedb:00000001-a-4"
+    scores_path = tmp_path / "scores.csv"
+    scores_path.write_text(table, encoding="utf-8")
+    built, _ = downloads_module._build_mavedb_download(
+        dataset_id,
+        downloads_module._MaveDBDownloadInput(
+            scores_path=scores_path,
+            metadata=_snapshot_score_set(dataset_id),
+            provenance={},
+        ),
+        drop_failed=False,
+        add_wildtype_row=False,
+        standardization=downloads_module._StandardizationOptions(),
+    )
+    return built
+
+
+def test_legacy_mavedb_score_column_remains_supported(tmp_path: Path) -> None:
+    table = _build_offline_mavedb_scores(
+        tmp_path,
+        "hgvs_pro,score\np.=,2.5\np.Met1Ala,-0.125\n",
+    )
+
+    assert table["score_raw"].tolist() == [2.5, -0.125]
+    assert table["mutated_sequence"].tolist() == ["MKT", "AKT"]
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        (
+            "accession,hgvs_pro,scores.sd,scores.se,scores.df\n"
+            "urn:mavedb:00000001-a-4#1,p.=,0.1,0.01,10\n"
+        ),
+        (
+            "accession,scores.score,scores.sd\n"
+            "urn:mavedb:00000001-a-4#1,1.0,0.1\n"
+        ),
+    ],
+)
+def test_mavedb_missing_primary_score_or_hgvs_is_rejected(
+    table: str,
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(InvalidDatasetError, match="score nor HGVS"):
+        _build_offline_mavedb_scores(tmp_path, table)
 
 
 def test_download_api_is_public() -> None:
@@ -1266,9 +1327,32 @@ def test_snapshot_single_uses_offline_tables_common_builder_and_provenance(
 
     first_table = pd.read_csv(first.dataset_path)
     assert first_table["score_raw"].tolist() == [1.0, 0.5, -1.0]
+    assert first_table["score"].tolist() == [1.0, 0.5, -1.0]
+    assert first_table["sd"].tolist() == [0.1, 0.2, 0.3]
+    assert first_table["se"].tolist() == [0.01, 0.02, 0.03]
+    assert first_table["df"].tolist() == [10, 20, 30]
+    assert not {
+        "scores.score",
+        "scores.sd",
+        "scores.se",
+        "scores.df",
+    }.intersection(first_table.columns)
+    assert first_table["accession"].tolist() == [
+        f"{dataset_id}#1",
+        f"{dataset_id}#2",
+        f"{dataset_id}#3",
+    ]
+    assert first_table["hgvs_pro"].tolist() == [
+        "p.=",
+        "p.Met1Ala",
+        "p.Gly2del",
+    ]
     assert first_table["status"].tolist() == ["OK", "OK", "Unsupported"]
     assert first_table["is_synthetic"].tolist() == [False, False, False]
     assert first_table["mutated_sequence"].iloc[0] == "MKT"
+    assert first_table["mutated_sequence"].iloc[1] == "AKT"
+    assert "score_log_ratio" not in first_table.columns
+    assert "score_binary_like" not in first_table.columns
     assert str(first_table["score_raw"].dtype) == "float64"
     assert first.dataset_path.read_bytes() == second.dataset_path.read_bytes()
     assert sorted(path.name for path in first.dataset_path.parent.iterdir()) == [
@@ -1309,11 +1393,22 @@ def test_snapshot_single_uses_offline_tables_common_builder_and_provenance(
     extracted_scores = next(
         cache.root.glob("mavedb/snapshot_tables/20840937/*/scores.csv")
     )
+    assert extracted_scores.read_text(encoding="utf-8").splitlines()[0] == (
+        "accession,hgvs_nt,hgvs_splice,hgvs_pro,score,sd,se,df"
+    )
+    api_scores = tmp_path / "api-like-scores.csv"
+    api_scores.write_text(
+        "accession,hgvs_nt,hgvs_splice,hgvs_pro,score,sd,se,df\n"
+        f"{dataset_id}#1,c.=,,p.=,1.0,0.1,0.01,10\n"
+        f"{dataset_id}#2,c.1A>G,,p.Met1Ala,0.5,0.2,0.02,20\n"
+        f"{dataset_id}#3,c.4_6del,,p.Gly2del,-1.0,0.3,0.03,30\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         downloads_module,
         "_acquire_mavedb_api_dataset",
         lambda *args, **kwargs: downloads_module._MaveDBDownloadInput(
-            scores_path=extracted_scores,
+            scores_path=api_scores,
             metadata=metadata,
             provenance={},
         ),
@@ -1325,11 +1420,16 @@ def test_snapshot_single_uses_offline_tables_common_builder_and_provenance(
         cache=cache,
         acquisition="api",
     )
+    api_table = pd.read_csv(api.dataset_path)
+    assert first_table.columns.tolist() == api_table.columns.tolist()
     pd.testing.assert_frame_equal(
         first_table,
-        pd.read_csv(api.dataset_path),
+        api_table,
         check_dtype=True,
+        check_exact=True,
+        check_like=False,
     )
+    assert first.dataset_path.read_bytes() == api.dataset_path.read_bytes()
     for result in (first, api):
         assert result.summary["wt_score"] == 1.0
         assert result.summary["wt_score_provenance"] == "observed_wildtype_row"

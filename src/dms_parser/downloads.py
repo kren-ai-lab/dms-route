@@ -1392,7 +1392,7 @@ def _build_mavedb_download(
     score_col = next(
         (
             column
-            for column in ("score", "DMS_score", "fitness")
+            for column in ("score", "scores.score", "DMS_score", "fitness")
             if column in raw_table.columns
         ),
         None,

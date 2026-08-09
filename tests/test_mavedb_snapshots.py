@@ -143,7 +143,10 @@ def _zenodo_payload(
                 "checksum": checksum
                 or f"md5:{hashlib.md5(archive).hexdigest()}",
                 "links": {
-                    "content": f"https://zenodo.org/api/records/{record_id}/files/content"
+                    "self": (
+                        f"https://zenodo.org/api/records/{record_id}/files/"
+                        f"{filename}/content"
+                    )
                 },
             }
         ],
@@ -190,7 +193,10 @@ def test_resolve_latest_follows_redirects_and_maps_concrete_record() -> None:
         filename="mavedb-dump.test.tar.gz",
         size=len(archive),
         checksum=f"md5:{hashlib.md5(archive).hexdigest()}",
-        download_url="https://zenodo.org/api/records/20840937/files/content",
+        download_url=(
+            "https://zenodo.org/api/records/20840937/files/"
+            "mavedb-dump.test.tar.gz/content"
+        ),
     )
     assert session.calls == [
         (MAVEDB_ZENODO_API_URL, {"timeout": 17, "allow_redirects": True})
@@ -254,6 +260,88 @@ def test_supported_archive_forms_are_selected(
 
     assert record.filename == filename
     assert snapshots_module._archive_format(record.filename) == expected_format
+
+
+def test_current_zenodo_self_download_url_is_accepted() -> None:
+    payload = _zenodo_payload(b"archive")
+
+    record = snapshots_module._snapshot_record_from_zenodo(
+        payload,
+        expected_id="20840937",
+    )
+
+    assert record.download_url == (
+        "https://zenodo.org/api/records/20840937/files/"
+        "mavedb-dump.test.tar.gz/content"
+    )
+
+
+def test_legacy_content_download_url_is_accepted() -> None:
+    payload = _zenodo_payload(b"archive")
+    legacy_url = "https://zenodo.org/api/records/20840937/files/content"
+    payload["files"][0]["links"] = {"content": legacy_url}
+
+    record = snapshots_module._snapshot_record_from_zenodo(
+        payload,
+        expected_id="20840937",
+    )
+
+    assert record.download_url == legacy_url
+
+
+@pytest.mark.parametrize(
+    "invalid_content",
+    ["", "relative/path", "ftp://example.test/archive"],
+)
+def test_valid_self_url_is_used_when_content_is_invalid(
+    invalid_content: str,
+) -> None:
+    payload = _zenodo_payload(b"archive")
+    self_url = payload["files"][0]["links"]["self"]
+    payload["files"][0]["links"]["content"] = invalid_content
+
+    record = snapshots_module._snapshot_record_from_zenodo(
+        payload,
+        expected_id="20840937",
+    )
+
+    assert record.download_url == self_url
+
+
+def test_valid_content_url_is_preferred_over_self() -> None:
+    payload = _zenodo_payload(b"archive")
+    preferred_url = "https://zenodo.org/api/records/20840937/files/content"
+    payload["files"][0]["links"]["content"] = preferred_url
+
+    record = snapshots_module._snapshot_record_from_zenodo(
+        payload,
+        expected_id="20840937",
+    )
+
+    assert record.download_url == preferred_url
+
+
+@pytest.mark.parametrize(
+    "links",
+    [
+        {},
+        {"self": ""},
+        {"self": "relative/path"},
+        {"self": "ftp://example.test/archive"},
+        {"content": "relative/path", "self": "file:///tmp/archive"},
+    ],
+)
+def test_invalid_or_missing_archive_download_urls_are_rejected(
+    links: dict[str, str],
+) -> None:
+    payload = _zenodo_payload(b"archive")
+    payload["files"][0]["links"] = links
+
+    with pytest.raises(MaveDBSnapshotError, match="download URL"):
+        snapshots_module._snapshot_record_from_zenodo(
+            payload,
+            expected_id="20840937",
+        )
 
 
 def test_unrelated_files_do_not_change_unique_archive_selection() -> None:
@@ -337,17 +425,12 @@ def test_invalid_zenodo_json_is_wrapped() -> None:
         ("checksum", "missing-colon"),
         ("checksum", "md5:short"),
         ("checksum", "unsupported:0011"),
-        ("content", ""),
-        ("content", "relative/path"),
     ],
 )
 def test_invalid_archive_metadata_is_rejected(field: str, value: object) -> None:
     payload = _zenodo_payload(b"archive")
     file_metadata = payload["files"][0]
-    if field == "content":
-        file_metadata["links"][field] = value
-    else:
-        file_metadata[field] = value
+    file_metadata[field] = value
 
     with pytest.raises(MaveDBSnapshotError):
         snapshots_module._snapshot_record_from_zenodo(
@@ -382,7 +465,11 @@ def test_fetch_streams_verifies_and_publishes_deterministic_snapshot(
     assert result.archive_path.read_bytes() == archive
     assert result.main_json_path.read_bytes() == b'{"experimentSets": []}\n'
     assert not (expected_root / "scores.csv").exists()
-    assert session.calls[1][1] == {"stream": True, "timeout": 60}
+    assert session.calls[1] == (
+        "https://zenodo.org/api/records/20840937/files/"
+        "mavedb-dump.test.tar.gz/content",
+        {"stream": True, "timeout": 60},
+    )
     metadata = json.loads(
         (expected_root / "snapshot.json").read_text(encoding="utf-8")
     )
@@ -393,7 +480,10 @@ def test_fetch_streams_verifies_and_publishes_deterministic_snapshot(
         "checksum": f"md5:{hashlib.md5(archive).hexdigest()}",
         "concept_doi": MAVEDB_ZENODO_CONCEPT_DOI,
         "doi": "10.5281/zenodo.20840937",
-        "download_url": "https://zenodo.org/api/records/20840937/files/content",
+        "download_url": (
+            "https://zenodo.org/api/records/20840937/files/"
+            "mavedb-dump.test.tar.gz/content"
+        ),
         "main_json_sha256": hashlib.sha256(
             b'{"experimentSets": []}\n'
         ).hexdigest(),

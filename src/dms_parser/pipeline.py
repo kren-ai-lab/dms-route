@@ -406,7 +406,12 @@ def process_mavedb(
             score_col = entry.get("score_col") or next(
                 (
                     column
-                    for column in ["score", "DMS_score", "fitness"]
+                    for column in [
+                        "score",
+                        "scores.score",
+                        "DMS_score",
+                        "fitness",
+                    ]
                     if column in raw_table.columns
                 ),
                 None,

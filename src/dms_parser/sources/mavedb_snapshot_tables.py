@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -13,7 +15,7 @@ import tempfile
 import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, BinaryIO
 
 from dms_parser.cache import FilesystemCache
@@ -40,6 +42,12 @@ _MANIFEST_FILENAME = "manifest.json"
 _SCORES_FILENAME = "scores.csv"
 _COUNTS_FILENAME = "counts.csv"
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+_SNAPSHOT_SCORE_COLUMN_RENAMES = {
+    "scores.score": "score",
+    "scores.sd": "sd",
+    "scores.se": "se",
+    "scores.df": "df",
+}
 
 
 @dataclass(frozen=True)
@@ -425,7 +433,11 @@ def _validate_cached_file(
 ) -> None:
     """Validate one regular cached CSV against deterministic metadata."""
     if (
-        metadata.archive_member != archive_member
+        _resolve_table_member(
+            metadata.archive_member,
+            {archive_member},
+        )
+        != archive_member
         or metadata.filename != filename
     ):
         raise _InvalidTableCache("Cached file metadata is inconsistent.")
@@ -605,6 +617,10 @@ def _extract_and_publish(
         )
         for expected in misses:
             scores, counts = extracted[expected.dataset_id]
+            scores = _normalize_snapshot_score_columns(
+                staged_entries[expected.dataset_id] / _SCORES_FILENAME,
+                scores,
+            )
             _write_manifest(
                 staged_entries[expected.dataset_id] / _MANIFEST_FILENAME,
                 _manifest_values(snapshot, expected, scores, counts),
@@ -702,8 +718,9 @@ def _extract_from_zip(
         }
         for member in archive.infolist():
             raw_name = getattr(member, "orig_filename", member.filename)
-            if raw_name in selected:
-                selected[raw_name].append(member)
+            expected_name = _resolve_table_member(raw_name, expected_names)
+            if expected_name is not None:
+                selected[expected_name].append(member)
 
         results: dict[
             str,
@@ -793,8 +810,12 @@ def _extract_from_tar(
             name: [] for name in expected_names
         }
         for member in archive.getmembers():
-            if member.name in selected:
-                selected[member.name].append(member)
+            expected_name = _resolve_table_member(
+                member.name,
+                expected_names,
+            )
+            if expected_name is not None:
+                selected[expected_name].append(member)
 
         results: dict[
             str,
@@ -836,6 +857,32 @@ def _validate_tar_member(member: tarfile.TarInfo) -> None:
         raise MaveDBSnapshotTableError(
             f"Selected TAR member {member.name!r} must be a regular file."
         )
+
+
+def _resolve_table_member(
+    name: object,
+    expected_names: set[str],
+) -> str | None:
+    """Resolve one safe table member from either supported POSIX layout."""
+    if (
+        not isinstance(name, str)
+        or not name
+        or "\\" in name
+        or PureWindowsPath(name).drive
+    ):
+        return None
+    parts = tuple(name.split("/"))
+    if any(part in {"", ".", ".."} for part in parts):
+        return None
+    if parts[-1].startswith("._"):
+        return None
+    if len(parts) == 2:
+        candidate = "/".join(parts)
+    elif len(parts) == 3:
+        candidate = "/".join(parts[1:])
+    else:
+        return None
+    return candidate if candidate in expected_names else None
 
 
 def _stream_tar_member(
@@ -924,6 +971,89 @@ def _stream_to_staged_file(
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
     return size, checksum.hexdigest()
+
+
+def _normalize_snapshot_score_columns(
+    path: Path,
+    extracted: _ExtractedFile,
+) -> _ExtractedFile:
+    """Normalize exact bulk-snapshot score headers before publication."""
+    temporary_path: Path | None = None
+    with path.open("rb") as source:
+        header_line = source.readline()
+        if header_line.endswith(b"\r\n"):
+            header_bytes = header_line[:-2]
+            line_ending = b"\r\n"
+        elif header_line.endswith(b"\n"):
+            header_bytes = header_line[:-1]
+            line_ending = b"\n"
+        else:
+            header_bytes = header_line
+            line_ending = b""
+
+        bom = b"\xef\xbb\xbf" if header_bytes.startswith(b"\xef\xbb\xbf") else b""
+        try:
+            header = header_bytes[len(bom):].decode("utf-8")
+            columns = next(csv.reader([header], strict=True))
+        except (UnicodeError, csv.Error, StopIteration) as exc:
+            raise MaveDBSnapshotTableError(
+                "MaveDB snapshot scores CSV header is invalid."
+            ) from exc
+
+        renames: dict[str, str] = {}
+        for source_name, canonical_name in _SNAPSHOT_SCORE_COLUMN_RENAMES.items():
+            source_count = columns.count(source_name)
+            if source_count > 1:
+                raise MaveDBSnapshotTableError(
+                    f"MaveDB snapshot scores CSV contains duplicate column "
+                    f"{source_name!r}."
+                )
+            if source_count == 1 and canonical_name in columns:
+                raise MaveDBSnapshotTableError(
+                    "MaveDB snapshot scores CSV cannot normalize "
+                    f"{source_name!r} because canonical column "
+                    f"{canonical_name!r} already exists."
+                )
+            if source_count == 1:
+                renames[source_name] = canonical_name
+
+        if not renames:
+            return extracted
+
+        normalized_columns = [renames.get(column, column) for column in columns]
+        header_stream = io.StringIO(newline="")
+        csv.writer(header_stream, lineterminator="").writerow(normalized_columns)
+        normalized_header = bom + header_stream.getvalue().encode("utf-8")
+        checksum = hashlib.sha256()
+        size = 0
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=path.parent,
+                prefix=f".{path.name}-normalize-",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                for chunk in (normalized_header, line_ending):
+                    handle.write(chunk)
+                    checksum.update(chunk)
+                    size += len(chunk)
+                while chunk := source.read(_CHUNK_SIZE):
+                    handle.write(chunk)
+                    checksum.update(chunk)
+                    size += len(chunk)
+            source.close()
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()
+
+    return _ExtractedFile(
+        archive_member=extracted.archive_member,
+        filename=extracted.filename,
+        size=size,
+        sha256=checksum.hexdigest(),
+    )
 
 
 def _manifest_values(

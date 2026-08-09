@@ -117,6 +117,28 @@ def _default_entries() -> list[tuple[str, bytes, str]]:
     ]
 
 
+def _under_top_level(
+    entries: list[tuple[str, bytes, str]],
+    top_level: str = "arbitrary-snapshot-version",
+) -> list[tuple[str, bytes, str]]:
+    """Place archive fixtures below one variable top-level directory."""
+    return [
+        (f"{top_level}/{name}", content, kind)
+        for name, content, kind in entries
+    ]
+
+
+def _replace_scores_content(
+    content: bytes,
+) -> list[tuple[str, bytes, str]]:
+    """Replace the primary fixture score table while preserving its path."""
+    expected_name = _archive_member(CURRENT_ONE, "scores")
+    return [
+        (name, content if name == expected_name else value, kind)
+        for name, value, kind in _default_entries()
+    ]
+
+
 def _write_zip(
     path: Path,
     entries: list[tuple[str, bytes, str]],
@@ -375,7 +397,7 @@ def test_catalog_is_loaded_once_for_multiple_dataset_ids(
 
 
 @pytest.mark.parametrize("archive_format", ["zip", "tar.gz"])
-def test_selective_extraction_scores_counts_manifest_and_layout(
+def test_root_level_selective_extraction_scores_counts_and_manifest(
     archive_format: str,
     tmp_path: Path,
 ) -> None:
@@ -440,6 +462,143 @@ def test_selective_extraction_scores_counts_manifest_and_layout(
     )
     for forbidden in ("retrieved_at", "extracted_at", "cache_hit", str(tmp_path)):
         assert forbidden not in manifest_text
+
+
+@pytest.mark.parametrize("archive_format", ["zip", "tar.gz"])
+def test_versioned_top_level_layout_resolves_scores_and_counts(
+    archive_format: str,
+    tmp_path: Path,
+) -> None:
+    top_level = "some-future-mavedb-release"
+    snapshot = _snapshot(
+        tmp_path,
+        archive_format,
+        entries=_under_top_level(_default_entries(), top_level),
+    )
+
+    first = _extract(snapshot, [CURRENT_ONE], tmp_path).tables[0]
+
+    assert first.scores_path.read_bytes() == CURRENT_ONE_SCORES
+    assert first.counts_path is not None
+    assert first.counts_path.read_bytes() == CURRENT_ONE_COUNTS
+    manifest = json.loads(
+        (first.scores_path.parent / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["files"]["scores"]["archive_member"] == (
+        f"{top_level}/{_archive_member(CURRENT_ONE, 'scores')}"
+    )
+    assert manifest["files"]["counts"]["archive_member"] == (
+        f"{top_level}/{_archive_member(CURRENT_ONE, 'counts')}"
+    )
+
+    cached = _extract(snapshot, [CURRENT_ONE], tmp_path).tables[0]
+    assert cached.cache_hit is True
+
+
+@pytest.mark.parametrize("archive_format", ["zip", "tar.gz"])
+def test_appledouble_sidecar_is_ignored_beside_valid_member(
+    archive_format: str,
+    tmp_path: Path,
+) -> None:
+    top_level = "versioned-dump"
+    entries = _under_top_level(_default_entries(), top_level)
+    filename = _archive_member(CURRENT_ONE, "scores").removeprefix("csv/")
+    entries.append(
+        (
+            f"{top_level}/csv/._{filename}",
+            b"appledouble metadata",
+            "file",
+        )
+    )
+    snapshot = _snapshot(tmp_path, archive_format, entries=entries)
+
+    table = _extract(snapshot, [CURRENT_ONE], tmp_path).tables[0]
+
+    assert table.scores_path.read_bytes() == CURRENT_ONE_SCORES
+
+
+@pytest.mark.parametrize("archive_format", ["zip", "tar.gz"])
+def test_current_bulk_score_headers_are_normalized_exactly(
+    archive_format: str,
+    tmp_path: Path,
+) -> None:
+    source = (
+        b"accession,hgvs_pro,scores.score,scores.sd,scores.se,scores.df,"
+        b"scores.score.extra\n"
+        b"urn:mavedb:00000003-a-1#1,p.=,1.25,0.2,0.03,12,unchanged\n"
+    )
+    snapshot = _snapshot(
+        tmp_path,
+        archive_format,
+        entries=_replace_scores_content(source),
+    )
+
+    table = _extract(snapshot, [CURRENT_ONE], tmp_path).tables[0]
+
+    expected = (
+        b"accession,hgvs_pro,score,sd,se,df,scores.score.extra\n"
+        b"urn:mavedb:00000003-a-1#1,p.=,1.25,0.2,0.03,12,unchanged\n"
+    )
+    assert table.scores_path.read_bytes() == expected
+    manifest = json.loads(
+        (table.scores_path.parent / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["files"]["scores"]["size"] == len(expected)
+    assert manifest["files"]["scores"]["sha256"] == hashlib.sha256(
+        expected
+    ).hexdigest()
+
+
+@pytest.mark.parametrize("archive_format", ["zip", "tar.gz"])
+def test_canonical_score_headers_are_preserved_byte_for_byte(
+    archive_format: str,
+    tmp_path: Path,
+) -> None:
+    source = b"hgvs_pro,score,sd,se,df\np.=,1.25,0.2,0.03,12\n"
+    snapshot = _snapshot(
+        tmp_path,
+        archive_format,
+        entries=_replace_scores_content(source),
+    )
+
+    table = _extract(snapshot, [CURRENT_ONE], tmp_path).tables[0]
+
+    assert table.scores_path.read_bytes() == source
+
+
+@pytest.mark.parametrize("archive_format", ["zip", "tar.gz"])
+@pytest.mark.parametrize(
+    ("source_name", "canonical_name"),
+    [
+        ("scores.score", "score"),
+        ("scores.sd", "sd"),
+        ("scores.se", "se"),
+        ("scores.df", "df"),
+    ],
+)
+def test_snapshot_score_header_collision_is_rejected(
+    archive_format: str,
+    source_name: str,
+    canonical_name: str,
+    tmp_path: Path,
+) -> None:
+    source = (
+        f"hgvs_pro,{source_name},{canonical_name}\np.=,1.25,99\n".encode()
+    )
+    snapshot = _snapshot(
+        tmp_path,
+        archive_format,
+        entries=_replace_scores_content(source),
+    )
+
+    with pytest.raises(MaveDBSnapshotTableError, match="already exists"):
+        _extract(snapshot, [CURRENT_ONE], tmp_path)
+
+    assert not (_record_root(tmp_path) / CURRENT_ONE.replace(":", "-")).exists()
 
 
 @pytest.mark.parametrize("archive_format", ["zip", "tar.gz"])
@@ -509,6 +668,23 @@ def test_duplicate_selected_members_are_rejected(
         _extract(snapshot, [CURRENT_ONE], tmp_path)
 
 
+@pytest.mark.parametrize("archive_format", ["zip", "tar.gz"])
+@pytest.mark.parametrize("kind", ["scores", "counts"])
+def test_root_and_versioned_valid_members_are_ambiguous(
+    archive_format: str,
+    kind: str,
+    tmp_path: Path,
+) -> None:
+    name = _archive_member(CURRENT_ONE, kind)
+    entries = _default_entries() + [
+        (f"another-release/{name}", b"ambiguous", "file")
+    ]
+    snapshot = _snapshot(tmp_path, archive_format, entries=entries)
+
+    with pytest.raises(MaveDBSnapshotTableError, match="duplicate member"):
+        _extract(snapshot, [CURRENT_ONE], tmp_path)
+
+
 @pytest.mark.parametrize(
     ("archive_format", "special_kind"),
     [
@@ -551,8 +727,13 @@ def test_encrypted_zip_member_is_rejected() -> None:
     [
         "/csv/urn-mavedb-00000003-a-1.scores.csv",
         "../csv/urn-mavedb-00000003-a-1.scores.csv",
+        "C:/csv/urn-mavedb-00000003-a-1.scores.csv",
+        "release/../csv/urn-mavedb-00000003-a-1.scores.csv",
         r"csv\urn-mavedb-00000003-a-1.scores.csv",
         "nested/urn-mavedb-00000003-a-1.scores.csv",
+        "one/two/csv/urn-mavedb-00000003-a-1.scores.csv",
+        "release/not-csv/urn-mavedb-00000003-a-1.scores.csv",
+        "prefix-csv/urn-mavedb-00000003-a-1.scores.csv",
         "csv/URN-mavedb-00000003-a-1.scores.csv",
         "csv/Current one.scores.csv",
         "csv/GENE1.scores.csv",

@@ -287,7 +287,10 @@ def test_mavedb_dataset_columns_and_metadata_reach_builder(
             }
 
     class ScoresResponse:
-        text = "custom_hgvs,custom_score\np.Met1Ala,0.5\n"
+        text = (
+            "custom_hgvs,custom_score,scores.score,scores.sd\n"
+            "p.Met1Ala,0.5,99,98\n"
+        )
 
         def raise_for_status(self) -> None:
             """Represent a successful score response."""
@@ -328,6 +331,58 @@ def test_mavedb_dataset_columns_and_metadata_reach_builder(
     assert builder_calls[0]["gene"] == "GENE1"
     assert builder_calls[0]["uniprot_id"] == "P12345"
     assert builder_calls[0]["add_wildtype_row"] is False
+
+
+def test_mavedb_scores_score_column_is_auto_detected_exactly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-aa-2"
+    builder_calls: list[dict[str, Any]] = []
+
+    class MetadataResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "targetGenes": [{"name": "GENE1"}],
+                "targetSequence": {"sequence": "MKT"},
+            }
+
+    class ScoresResponse:
+        text = (
+            "accession,hgvs_pro,scores.score,scores.sd,scores.se,scores.df\n"
+            f"{dataset_id}#1,p.Met1Ala,-0.375,91,92,93\n"
+        )
+
+        def raise_for_status(self) -> None:
+            """Represent a successful score response."""
+
+    def source_request(url: str, *, timeout: int):
+        assert timeout == 60
+        return ScoresResponse() if url.endswith("/scores") else MetadataResponse()
+
+    def build_dataset(**kwargs: Any) -> pd.DataFrame:
+        builder_calls.append(kwargs)
+        return standardized_table()
+
+    monkeypatch.setattr(pipeline_module.requests, "get", source_request)
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_mavedb_dataset",
+        build_dataset,
+    )
+
+    pipeline_module.process_mavedb(
+        {
+            "dir_base": tmp_path / "mavedb",
+            "datasets": [{"dataset_id": dataset_id}],
+        },
+        base_url="https://api.example.test",
+    )
+
+    assert builder_calls[0]["hgvs_col"] == "hgvs_pro"
+    assert builder_calls[0]["score_col"] == "scores.score"
 
 
 def test_dataset_failure_does_not_abort_later_dataset(
