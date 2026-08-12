@@ -557,6 +557,20 @@ dms-parser download-many \
     --output-dir datasets
 ```
 
+Alternatively, `--dataset-id-file` reads UTF-8 text containing one dataset
+identifier per line; blank lines are ignored and an optional UTF-8 BOM is
+accepted:
+
+```bash
+dms-parser download-many \
+    --source mavedb \
+    --dataset-id-file mavedb_ids.txt \
+    --output-dir mavedb_download
+```
+
+When direct and file inputs are combined, direct `--dataset-id` values come
+first in their supplied order, followed by file values in file order.
+
 Use one prefetched MaveDB snapshot for a reproducible batch by repeating the
 existing singular `--dataset-id` option:
 

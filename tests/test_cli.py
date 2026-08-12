@@ -104,6 +104,7 @@ HELP_CASES = (
             (
                 "--source",
                 "--dataset-id",
+                "--dataset-id-file",
                 "--output-dir",
                 "DATASET_ID=SEQUENCE",
                 "DATASET_ID=SCORE",
@@ -2426,6 +2427,302 @@ def test_download_many_help_excludes_deferred_options(
     assert "--snapshot-record" in output
     assert "--include-superseded" in output
     assert "1.9 GB" in output
+    normalized = _normalized_help("download-many")
+    assert "--dataset-id-file" in normalized
+    assert "UTF-8 text file" in normalized
+    assert "one dataset identifier per line" in normalized
+    assert "blank lines are ignored" in normalized
+
+
+def _capture_download_many_call(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: dict[str, Any],
+) -> None:
+    """Capture one download-many API call without source or output I/O."""
+    def batch(source: str, dataset_ids: list[str], **kwargs: Any):
+        calls.update(source=source, dataset_ids=dataset_ids, **kwargs)
+        return _batch_download_result(kwargs["output_dir"])
+
+    monkeypatch.setattr(cli_module, "download_and_standardize_datasets", batch)
+    monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
+
+
+def _forbid_download_many_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject cache construction or entry into the batch download API."""
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("invalid identifier input performed a side effect")
+
+    monkeypatch.setattr(cli_module, "FilesystemCache", forbidden)
+    monkeypatch.setattr(
+        cli_module,
+        "download_and_standardize_datasets",
+        forbidden,
+    )
+
+
+def test_download_many_accepts_bom_file_as_only_identifier_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identifier_file = tmp_path / "dataset-ids.txt"
+    identifier_file.write_bytes(
+        b"\xef\xbb\xbf  ASSAY_2  \r\n\r\n\t\r\n ASSAY_1\n"
+    )
+    calls: dict[str, Any] = {}
+    _capture_download_many_call(monkeypatch, calls)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "download-many",
+            "--source",
+            "proteingym",
+            "--dataset-id-file",
+            str(identifier_file),
+            "--output-dir",
+            str(tmp_path / "output"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["dataset_ids"] == ["ASSAY_2", "ASSAY_1"]
+
+
+def test_download_many_places_direct_ids_before_file_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identifier_file = tmp_path / "dataset-ids.txt"
+    identifier_file.write_text("ASSAY_3\nASSAY_4\n", encoding="utf-8")
+    calls: dict[str, Any] = {}
+    _capture_download_many_call(monkeypatch, calls)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "download-many",
+            "--source",
+            "proteingym",
+            "--dataset-id",
+            "ASSAY_2",
+            "--dataset-id",
+            "ASSAY_1",
+            "--dataset-id-file",
+            str(identifier_file),
+            "--output-dir",
+            str(tmp_path / "output"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["dataset_ids"] == [
+        "ASSAY_2",
+        "ASSAY_1",
+        "ASSAY_3",
+        "ASSAY_4",
+    ]
+
+
+def test_download_many_file_ids_support_wt_mappings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identifier_file = tmp_path / "dataset-ids.txt"
+    identifier_file.write_text("ASSAY_1\n", encoding="utf-8")
+    calls: dict[str, Any] = {}
+    _capture_download_many_call(monkeypatch, calls)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "download-many",
+            "--source",
+            "proteingym",
+            "--dataset-id-file",
+            str(identifier_file),
+            "--wt-sequence",
+            "ASSAY_1=MKT",
+            "--wt-score",
+            "ASSAY_1=1.25",
+            "--output-dir",
+            str(tmp_path / "output"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["wt_sequence"] == {"ASSAY_1": "MKT"}
+    assert calls["wt_score"] == {"ASSAY_1": 1.25}
+
+
+def test_download_many_empty_file_requires_an_identifier_without_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identifier_file = tmp_path / "empty.txt"
+    identifier_file.write_text(" \r\n\t\n", encoding="utf-8")
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+    _forbid_download_many_side_effects(monkeypatch)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "download-many",
+            "--source",
+            "proteingym",
+            "--dataset-id-file",
+            str(identifier_file),
+            "--cache-dir",
+            str(cache_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "at least one dataset identifier" in result.stderr
+    assert not cache_dir.exists()
+    assert not output_dir.exists()
+
+
+def test_download_many_duplicate_across_direct_and_file_uses_batch_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identifier_file = tmp_path / "dataset-ids.txt"
+    identifier_file.write_text("ASSAY_1\n", encoding="utf-8")
+    output_dir = tmp_path / "output"
+    _forbid_download_many_side_effects(monkeypatch)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "download-many",
+            "--source",
+            "proteingym",
+            "--dataset-id",
+            "ASSAY_1",
+            "--dataset-id-file",
+            str(identifier_file),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Duplicate proteingym dataset_id 'ASSAY_1'" in result.stderr
+    assert not output_dir.exists()
+
+
+def test_download_many_invalid_file_line_reports_path_and_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identifier_file = tmp_path / "dataset-ids.txt"
+    identifier_file.write_text("ASSAY_1\nBAD\tID\n", encoding="utf-8")
+    output_dir = tmp_path / "output"
+    monkeypatch.chdir(tmp_path)
+    _forbid_download_many_side_effects(monkeypatch)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "download-many",
+            "--source",
+            "proteingym",
+            "--dataset-id-file",
+            identifier_file.name,
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 2
+    normalized = re.sub(
+        r"\s+",
+        " ",
+        re.sub(r"[\u2500-\u257f]", " ", result.stderr),
+    )
+    assert identifier_file.name in normalized
+    assert "line 2" in normalized
+    assert "control characters" in normalized
+    assert not output_dir.exists()
+
+
+def test_download_many_invalid_utf8_is_clean_usage_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identifier_file = tmp_path / "dataset-ids.txt"
+    identifier_file.write_bytes(b"ASSAY_1\n\xff\n")
+    output_dir = tmp_path / "output"
+    _forbid_download_many_side_effects(monkeypatch)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "download-many",
+            "--source",
+            "proteingym",
+            "--dataset-id-file",
+            str(identifier_file),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "Traceback" not in result.stderr
+    assert "not valid UTF-8" in result.stderr
+    assert identifier_file.name in result.stderr
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("failure", ["missing", "unreadable"])
+def test_download_many_file_access_failure_precedes_side_effects(
+    failure: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    identifier_file = tmp_path / "dataset-ids.txt"
+    if failure == "unreadable":
+        identifier_file.write_text("ASSAY_1\n", encoding="utf-8")
+        monkeypatch.setattr(
+            cli_module,
+            "_read_dataset_id_file",
+            lambda path: (_ for _ in ()).throw(
+                PermissionError("permission denied")
+            ),
+        )
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+    _forbid_download_many_side_effects(monkeypatch)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "download-many",
+            "--source",
+            "proteingym",
+            "--dataset-id-file",
+            str(identifier_file),
+            "--cache-dir",
+            str(cache_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Traceback" not in result.stderr
+    assert str(identifier_file) in caplog.text
+    assert not cache_dir.exists()
+    assert not output_dir.exists()
 
 
 @pytest.mark.parametrize(
@@ -2642,6 +2939,9 @@ def test_download_many_rejects_invalid_wt_mappings_before_side_effects(
         ),
     )
     output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    existing = output_dir / "download-summary.csv"
+    existing.write_text("existing", encoding="utf-8")
 
     with pytest.raises(SystemExit) as exc_info:
         cli_module.main(
@@ -2658,7 +2958,8 @@ def test_download_many_rejects_invalid_wt_mappings_before_side_effects(
         )
 
     assert exc_info.value.code == 2
-    assert not output_dir.exists()
+    assert existing.read_text(encoding="utf-8") == "existing"
+    assert list(output_dir.iterdir()) == [existing]
 
 
 @pytest.mark.parametrize(

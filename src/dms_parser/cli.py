@@ -222,6 +222,27 @@ def _batch_dataset_id(value: str) -> str:
     return value
 
 
+def _read_dataset_id_file(path: Path) -> list[str]:
+    """Read ordered dataset identifiers from a UTF-8 text file."""
+    dataset_ids: list[str] = []
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8-sig").splitlines(),
+        start=1,
+    ):
+        dataset_id = line.strip()
+        if not dataset_id:
+            continue
+        try:
+            _batch_dataset_id(dataset_id)
+        except typer.BadParameter as exc:
+            raise InvalidPipelineOptionError(
+                f"Invalid dataset identifier in {path} at line "
+                f"{line_number}: {exc.message}."
+            ) from exc
+        dataset_ids.append(dataset_id)
+    return dataset_ids
+
+
 def _batch_fallback_mapping(
     values: list[str] | None,
     dataset_ids: list[str],
@@ -782,14 +803,6 @@ def _download_command(
 )
 def _download_many_command(
     source: Annotated[_CatalogSource, typer.Option("--source")],
-    dataset_ids: Annotated[
-        list[str],
-        typer.Option(
-            "--dataset-id",
-            parser=_batch_dataset_id,
-            metavar="DATASET_ID",
-        ),
-    ],
     output_dir: Annotated[
         Path,
         typer.Option(
@@ -798,6 +811,26 @@ def _download_many_command(
             metavar="OUTPUT_DIR",
         ),
     ],
+    dataset_ids: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--dataset-id",
+            parser=_batch_dataset_id,
+            metavar="DATASET_ID",
+        ),
+    ] = None,
+    dataset_id_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--dataset-id-file",
+            parser=_non_empty_path,
+            metavar="PATH",
+            help=(
+                "UTF-8 text file containing one dataset identifier per line; "
+                "blank lines are ignored."
+            ),
+        ),
+    ] = None,
     cache_dir: Annotated[
         Path | None,
         typer.Option(
@@ -893,15 +926,42 @@ def _download_many_command(
     source_name = source.value
     acquisition_name = acquisition.value if acquisition is not None else None
     resolved_output_dir = output_dir.expanduser()
+    resolved_dataset_id_file = (
+        dataset_id_file.expanduser()
+        if dataset_id_file is not None
+        else None
+    )
+    try:
+        file_dataset_ids = (
+            _read_dataset_id_file(resolved_dataset_id_file)
+            if resolved_dataset_id_file is not None
+            else []
+        )
+    except InvalidPipelineOptionError as exc:
+        _usage_error(str(exc))
+    except UnicodeError as exc:
+        _usage_error(
+            f"Dataset ID file {resolved_dataset_id_file} is not valid "
+            f"UTF-8: {exc}"
+        )
+    except OSError as exc:
+        logger.error(
+            "Dataset ID file preflight failed path=%s: %s",
+            resolved_dataset_id_file,
+            exc,
+        )
+        raise typer.Exit(1) from None
+
+    resolved_dataset_ids = [*(dataset_ids or []), *file_dataset_ids]
     try:
         sequence_fallbacks = _batch_fallback_mapping(
             wt_sequence_entries,
-            dataset_ids,
+            resolved_dataset_ids,
             field="wt_sequence",
         )
         score_fallbacks = _batch_fallback_mapping(
             wt_score_entries,
-            dataset_ids,
+            resolved_dataset_ids,
             field="wt_score",
         )
         _validate_download_acquisition(
@@ -912,7 +972,7 @@ def _download_many_command(
         )
         _validate_dataset_batch_request(
             source_name,
-            dataset_ids,
+            resolved_dataset_ids,
             output_dir=resolved_output_dir,
             refresh=refresh,
             drop_failed=drop_failed,
@@ -920,7 +980,7 @@ def _download_many_command(
             overwrite=overwrite,
         )
         _validate_batch_fallbacks(
-            tuple(dataset_ids),
+            tuple(resolved_dataset_ids),
             wt_sequence=sequence_fallbacks,
             wt_score=score_fallbacks,
         )
@@ -944,7 +1004,7 @@ def _download_many_command(
     try:
         result = download_and_standardize_datasets(
             source_name,
-            dataset_ids,
+            resolved_dataset_ids,
             output_dir=resolved_output_dir,
             cache=FilesystemCache(_cache_root(cache_dir)),
             refresh=refresh,
