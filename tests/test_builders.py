@@ -718,7 +718,7 @@ def test_build_mavedb_dataset_basic(tmp_path, mavedb_like_df: pd.DataFrame, wt_s
 def test_build_mavedb_dataset_with_unsupported_variant(tmp_path, wt_sequence: str):
     df = pd.DataFrame(
         {
-            "hgvs_pro": ["p.Met1Ala", "p.Gly10del", "p.[=;Gly10del]"],
+            "hgvs_pro": ["p.Met1Ala", "p.[Gly10del]", "p.[=;Gly10del]"],
             "score": [0.8, 0.2, 0.1],
         }
     )
@@ -734,6 +734,61 @@ def test_build_mavedb_dataset_with_unsupported_variant(tmp_path, wt_sequence: st
     )
 
     assert list(result["status"]) == ["OK", "Unsupported", "Unsupported"]
+
+
+def test_build_mavedb_dataset_supports_bounded_indels_and_transforms(tmp_path):
+    path = tmp_path / "mavedb.csv"
+    pd.DataFrame(
+        {
+            "hgvs_pro": ["p.=", "p.Cys2del", "p.Asp1_Cys2insLys"],
+            "score": [1.0, 0.25, 1.5],
+        }
+    ).to_csv(path, index=False)
+
+    result = build_mavedb_dataset(
+        input_path=path,
+        score_col="score",
+        wt_sequence="DCA",
+        add_relative_score=True,
+        relative_method="difference",
+        relative_output_col="score_delta",
+    )
+
+    assert result["variant"].tolist() == ["", "C2del", "D1_C2insK"]
+    assert result["mutated_sequence"].tolist() == ["DCA", "DA", "DKCA"]
+    assert result["score_raw"].tolist() == [1.0, 0.25, 1.5]
+    assert result["score_delta"].tolist() == [0.0, -0.75, 0.5]
+    assert result["status"].tolist() == ["OK", "OK", "OK"]
+    assert result["is_wildtype"].tolist() == [True, False, False]
+    assert result["is_synthetic"].tolist() == [False, False, False]
+    assert result["n_mutations"].tolist() == [0, 1, 1]
+
+
+def test_build_mavedb_dataset_indels_preserve_drop_failed_and_synthetic_wt(tmp_path):
+    path = tmp_path / "mavedb.csv"
+    pd.DataFrame(
+        {
+            "hgvs_pro": ["p.Cys2del", "p.[Cys2del]"],
+            "score": [0.25, -1.0],
+        }
+    ).to_csv(path, index=False)
+
+    result = build_mavedb_dataset(
+        input_path=path,
+        score_col="score",
+        wt_sequence="DCA",
+        drop_failed=True,
+        add_wildtype_row=True,
+        add_relative_score=False,
+    )
+
+    assert result["variant"].tolist() == ["", "C2del"]
+    assert result["mutated_sequence"].tolist() == ["DCA", "DA"]
+    assert result["status"].tolist() == ["OK", "OK"]
+    assert result["is_synthetic"].tolist() == [True, False]
+    assert result["n_mutations"].tolist() == [0, 1]
+    assert pd.isna(result.iloc[0]["score_raw"])
+    assert result.iloc[1]["score_raw"] == 0.25
 
 
 def test_build_mavedb_dataset_drop_failed(tmp_path, wt_sequence: str):

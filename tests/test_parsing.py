@@ -28,6 +28,7 @@ from dms_parser.parsing import (
     translate_dna,
     variant_to_sequence,
 )
+from dms_parser.types import ProteinDeletionEdit, ProteinInsertionEdit
 
 
 def test_is_wildtype_variant_detects_common_tokens():
@@ -134,7 +135,10 @@ def test_extract_mutation_tokens():
 
 
 def test_hgvs_pro_is_indel():
-    assert hgvs_pro_is_indel("p.Gly10del") is True
+    assert hgvs_pro_is_indel("p.Cys2del") is False
+    assert hgvs_pro_is_indel("p.Asp1_Ala2insLys") is False
+    assert hgvs_pro_is_indel("p.Cys2_Asp3del") is True
+    assert hgvs_pro_is_indel("p.[Cys2del]") is True
     assert hgvs_pro_is_indel("p.Met1Ala") is False
 
 
@@ -146,6 +150,13 @@ def test_parse_hgvs_pro_single():
 def test_parse_hgvs_pro_multi():
     result = parse_hgvs_pro("p.[Met1Ala;Lys2Arg]")
     assert result == [("M", 1, "A"), ("K", 2, "R")]
+
+
+def test_parse_hgvs_pro_bounded_indels_are_structured():
+    assert parse_hgvs_pro("p.Cys2del") == [ProteinDeletionEdit("C", 2)]
+    assert parse_hgvs_pro("p.Asp1_Ala2insLys") == [
+        ProteinInsertionEdit("D", 1, "A", 2, "K")
+    ]
 
 
 @pytest.mark.parametrize(
@@ -201,7 +212,20 @@ def test_parse_hgvs_pro_invalid_raises(hgvs_pro: str) -> None:
 
 @pytest.mark.parametrize(
     "hgvs_pro",
-    ["p.Gly10del", "p.[=;Gly10del]", "p.[Gly10fs;=]"],
+    [
+        "p.Cys2_Asp3del",
+        "p.Asp1_Ala2insLysArg",
+        "p.Cys2dup",
+        "p.Cys2delinsLys",
+        "p.Cys2fs",
+        "p.Cys2extTer4",
+        "p.(Cys2del)",
+        "p.Cys2del?",
+        "p.Cys2insLys",
+        "p.[Cys2del]",
+        "p.[=;Cys2del]",
+        "p.[Cys2del;Asp3Glu]",
+    ],
 )
 def test_parse_hgvs_pro_unsupported_raises(hgvs_pro: str) -> None:
     with pytest.raises(UnsupportedVariantError):
@@ -251,6 +275,62 @@ def test_hgvs_to_sequence(wt_sequence: str):
     assert variant == "M1A"
 
 
+def test_hgvs_to_sequence_reconstructs_bounded_indels():
+    assert hgvs_to_sequence("ACD", "p.Cys2del") == ("AD", "C2del")
+    assert hgvs_to_sequence("DA", "p.Asp1_Ala2insLys") == (
+        "DKA",
+        "D1_A2insK",
+    )
+
+
+@pytest.mark.parametrize(
+    ("wt_sequence", "hgvs_pro", "expected_sequence", "expected_variant"),
+    [
+        ("ACD", "p.Ala1del", "CD", "A1del"),
+        ("ACD", "p.Asp3del", "AC", "D3del"),
+    ],
+)
+def test_hgvs_to_sequence_deletes_first_or_last_residue(
+    wt_sequence: str,
+    hgvs_pro: str,
+    expected_sequence: str,
+    expected_variant: str,
+) -> None:
+    assert hgvs_to_sequence(wt_sequence, hgvs_pro) == (
+        expected_sequence,
+        expected_variant,
+    )
+
+
+@pytest.mark.parametrize(
+    ("wt_sequence", "hgvs_pro", "error"),
+    [
+        ("ACD", "p.Asp2del", "WT mismatch"),
+        ("ACD", "p.Cys4del", "out of range"),
+        ("DCA", "p.Asp1_Ala3insLys", "adjacent"),
+        ("DCA", "p.Ala3_Cys4insLys", "out of range"),
+        ("DCA", "p.Ala1_Cys2insLys", "WT mismatch"),
+        ("DCA", "p.Asp1_Ala2insLys", "WT mismatch"),
+    ],
+)
+def test_hgvs_to_sequence_rejects_invalid_indel_references(
+    wt_sequence: str,
+    hgvs_pro: str,
+    error: str,
+) -> None:
+    with pytest.raises(MutationApplicationError, match=error):
+        hgvs_to_sequence(wt_sequence, hgvs_pro)
+
+
+@pytest.mark.parametrize(
+    "hgvs_pro",
+    ["p.Foo2del", "p.Asp1_Ala2insFoo", "p.Asp1_Foo2insLys"],
+)
+def test_parse_hgvs_pro_rejects_invalid_indel_residue_codes(hgvs_pro: str) -> None:
+    with pytest.raises(InvalidHGVSVariantError, match="Unknown amino acid code"):
+        parse_hgvs_pro(hgvs_pro)
+
+
 @pytest.mark.parametrize(
     ("hgvs_pro", "expected_sequence", "expected_variant"),
     [
@@ -273,7 +353,7 @@ def test_hgvs_to_sequence_ignores_bracketed_equality_components(
 
 
 def test_parse_mavedb_hgvs_series():
-    series = pd.Series(["p.Met1Ala", "p.Gly10del", "p.invalid"])
+    series = pd.Series(["p.Met1Ala", "p.[Gly10del]", "p.invalid"])
     result = parse_mavedb_hgvs_series(series, strict=False)
 
     assert list(result["status"]) == ["OK", "Unsupported", "Error"]

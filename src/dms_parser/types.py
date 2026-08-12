@@ -2,7 +2,48 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional, TypedDict
+from dataclasses import dataclass
+from typing import Literal, Optional, TypeAlias, TypedDict
+
+
+MutationTuple = tuple[str, int, str]
+
+
+@dataclass(frozen=True)
+class ProteinSubstitutionEdit:
+    """Internal structured representation of one protein substitution."""
+
+    wt_aa: str
+    position: int
+    mut_aa: str
+    kind: Literal["substitution"] = "substitution"
+
+
+@dataclass(frozen=True)
+class ProteinDeletionEdit:
+    """Internal structured representation of one residue deletion."""
+
+    wt_aa: str
+    position: int
+    kind: Literal["deletion"] = "deletion"
+
+
+@dataclass(frozen=True)
+class ProteinInsertionEdit:
+    """Internal structured representation of one residue insertion."""
+
+    left_aa: str
+    left_position: int
+    right_aa: str
+    right_position: int
+    inserted_aa: str
+    kind: Literal["insertion"] = "insertion"
+
+
+ProteinEdit: TypeAlias = (
+    ProteinSubstitutionEdit | ProteinDeletionEdit | ProteinInsertionEdit
+)
+ParsedProteinEdit: TypeAlias = MutationTuple | ProteinDeletionEdit | ProteinInsertionEdit
 
 
 class ParsedVariantToken(TypedDict):
@@ -39,7 +80,4 @@ class ParsedMaveDBHGVSRecord(TypedDict):
     hgvs_pro: str
     status: Literal["OK", "Unsupported", "Error"]
     error: str
-    mutations: Optional[list[tuple[str, int, str]]]
-
-
-MutationTuple = tuple[str, int, str]
+    mutations: Optional[list[ParsedProteinEdit]]

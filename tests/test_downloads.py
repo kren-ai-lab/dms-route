@@ -88,7 +88,7 @@ def _write_cached_snapshot(
                     "scores.sd,scores.se,scores.df\n"
                     f"{score_set['urn']}#1,c.=,,p.=,1.0,0.1,0.01,10\n"
                     f"{score_set['urn']}#2,c.1A>G,,p.Met1Ala,0.5,0.2,0.02,20\n"
-                    f"{score_set['urn']}#3,c.4_6del,,p.Gly2del,-1.0,0.3,0.03,30\n"
+                    f"{score_set['urn']}#3,c.4_6del,,p.[Gly2del],-1.0,0.3,0.03,30\n"
                 ),
             )
             archive.writestr(
@@ -181,6 +181,48 @@ def test_legacy_mavedb_score_column_remains_supported(tmp_path: Path) -> None:
 
     assert table["score_raw"].tolist() == [2.5, -0.125]
     assert table["mutated_sequence"].tolist() == ["MKT", "AKT"]
+
+
+def test_single_mavedb_download_standardizes_bounded_indels_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-4"
+    scores_path = tmp_path / "indel-scores.csv"
+    scores_path.write_text(
+        "hgvs_pro,score\n"
+        "p.Cys2del,0.25\n"
+        "p.Asp1_Cys2insLys,1.5\n",
+        encoding="utf-8",
+    )
+    metadata = _snapshot_score_set(dataset_id)
+    metadata["targetSequence"] = {"sequence": "DCA"}
+    acquired = downloads_module._MaveDBDownloadInput(
+        scores_path=scores_path,
+        metadata=metadata,
+        provenance={},
+    )
+    monkeypatch.setattr(
+        downloads_module,
+        "_acquire_mavedb_api_dataset",
+        lambda *args, **kwargs: acquired,
+    )
+
+    result = download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "indel-download",
+        cache=FilesystemCache(tmp_path / "cache"),
+    )
+    table = pd.read_csv(result.dataset_path)
+
+    assert table["variant"].tolist() == ["C2del", "D1_C2insK"]
+    assert table["mutated_sequence"].tolist() == ["DA", "DKCA"]
+    assert table["score_raw"].tolist() == [0.25, 1.5]
+    assert table["status"].tolist() == ["OK", "OK"]
+    assert table["is_wildtype"].tolist() == [False, False]
+    assert table["is_synthetic"].tolist() == [False, False]
+    assert table["n_mutations"].tolist() == [1, 1]
 
 
 def test_single_mavedb_download_publishes_ambiguous_raw_wt_scores(
@@ -1477,7 +1519,7 @@ def test_snapshot_single_uses_offline_tables_common_builder_and_provenance(
     assert first_table["hgvs_pro"].tolist() == [
         "p.=",
         "p.Met1Ala",
-        "p.Gly2del",
+        "p.[Gly2del]",
     ]
     assert first_table["status"].tolist() == ["OK", "OK", "Unsupported"]
     assert first_table["is_synthetic"].tolist() == [False, False, False]
@@ -1533,7 +1575,7 @@ def test_snapshot_single_uses_offline_tables_common_builder_and_provenance(
         "accession,hgvs_nt,hgvs_splice,hgvs_pro,score,sd,se,df\n"
         f"{dataset_id}#1,c.=,,p.=,1.0,0.1,0.01,10\n"
         f"{dataset_id}#2,c.1A>G,,p.Met1Ala,0.5,0.2,0.02,20\n"
-        f"{dataset_id}#3,c.4_6del,,p.Gly2del,-1.0,0.3,0.03,30\n",
+        f"{dataset_id}#3,c.4_6del,,p.[Gly2del],-1.0,0.3,0.03,30\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(

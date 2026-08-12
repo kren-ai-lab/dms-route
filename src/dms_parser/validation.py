@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 import pandas as pd
 
 from dms_parser.exceptions import InvalidDatasetError, MissingWildTypeError, SequenceValidationError
+
+_SINGLE_DELETION_VARIANT_RE = re.compile(r"^[A-Z*X]\d+del$")
+_SINGLE_INSERTION_VARIANT_RE = re.compile(
+    r"^[A-Z*X]\d+_[A-Z*X]\d+ins[A-Z*X]$"
+)
+
 
 def validate_required_columns(
     df: pd.DataFrame,
@@ -212,7 +219,7 @@ def validate_consistent_sequence_lengths(
     only_status_ok: bool = True,
     status_col: str = "status",
 ) -> None:
-    """Validate that WT and mutated sequences have equal length."""
+    """Validate sequence lengths for substitutions and bounded protein indels."""
     validate_required_columns(df, [wt_sequence_col, mutated_sequence_col])
 
     subset = df.copy()
@@ -227,7 +234,15 @@ def validate_consistent_sequence_lengths(
         if pd.isna(wt) or pd.isna(mut):
             continue
 
-        if len(str(wt)) != len(str(mut)):
+        variant = str(row.get("variant", ""))
+        if _SINGLE_DELETION_VARIANT_RE.fullmatch(variant):
+            expected_delta = -1
+        elif _SINGLE_INSERTION_VARIANT_RE.fullmatch(variant):
+            expected_delta = 1
+        else:
+            expected_delta = 0
+
+        if len(str(mut)) != len(str(wt)) + expected_delta:
             bad_rows.append(idx)
 
     if bad_rows:

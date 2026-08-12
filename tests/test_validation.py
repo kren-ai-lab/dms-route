@@ -117,6 +117,40 @@ def test_validate_consistent_sequence_lengths_raises(standardized_dataset: pd.Da
         validate_consistent_sequence_lengths(df)
 
 
+def test_validate_consistent_sequence_lengths_accepts_bounded_indels():
+    df = pd.DataFrame(
+        {
+            "variant": ["C2del", "D1_A2insK", "D1E"],
+            "wt_sequence": ["ACD", "DA", "DA"],
+            "mutated_sequence": ["AD", "DKA", "EA"],
+            "status": ["OK", "OK", "OK"],
+        }
+    )
+
+    validate_consistent_sequence_lengths(df)
+
+
+@pytest.mark.parametrize(
+    ("variant", "mutated_sequence"),
+    [("C2del", "ACD"), ("D1_A2insK", "DA"), ("D1E", "E")],
+)
+def test_validate_consistent_sequence_lengths_enforces_edit_delta(
+    variant: str,
+    mutated_sequence: str,
+) -> None:
+    df = pd.DataFrame(
+        {
+            "variant": [variant],
+            "wt_sequence": ["DA" if variant != "C2del" else "ACD"],
+            "mutated_sequence": [mutated_sequence],
+            "status": ["OK"],
+        }
+    )
+
+    with pytest.raises(InvalidDatasetError):
+        validate_consistent_sequence_lengths(df)
+
+
 def test_validate_standard_dataset_passes(standardized_dataset: pd.DataFrame):
     validate_standard_dataset(
         standardized_dataset,

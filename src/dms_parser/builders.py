@@ -108,7 +108,7 @@ def _safe_hgvs_to_sequence(
         if hgvs_pro_is_indel(hgvs_pro):
             out["status"] = "Unsupported"
             out["error"] = (
-                "Protein-level indel/frameshift not supported in substitutions-only analysis."
+                "Complex protein indel/frameshift not supported."
             )
             return out
 

@@ -29,9 +29,24 @@ from dms_parser.exceptions import (
 from dms_parser.types import (
     MutationTuple,
     ParsedMaveDBHGVSRecord,
+    ParsedProteinEdit,
     ParsedVariant,
     ParsedVariantToken,
+    ProteinDeletionEdit,
+    ProteinEdit,
+    ProteinInsertionEdit,
+    ProteinSubstitutionEdit,
 )
+
+_HGVS_SINGLE_DELETION_RE = re.compile(
+    r"^p\.(?P<wt>[A-Z][a-z]{2})(?P<pos>\d+)del$"
+)
+_HGVS_SINGLE_INSERTION_RE = re.compile(
+    r"^p\.(?P<left>[A-Z][a-z]{2})(?P<left_pos>\d+)_"
+    r"(?P<right>[A-Z][a-z]{2})(?P<right_pos>\d+)"
+    r"ins(?P<inserted>[A-Z][a-z]{2})$"
+)
+
 
 def _normalize_variant_string(variant: Any) -> str:
     """Normalize a raw variant value into a clean string."""
@@ -265,9 +280,14 @@ def extract_mutation_tokens(variant: Any) -> list[str]:
 
 
 def hgvs_pro_is_indel(hgvs_pro: str) -> bool:
-    """Return True if hgvs_pro suggests indel or related unsupported syntax."""
-    s = str(hgvs_pro)
-    return any(token in s for token in INDEL_TOKENS_PRO)
+    """Return whether HGVS contains an indel outside the bounded support."""
+    value = str(hgvs_pro).strip()
+    if (
+        _HGVS_SINGLE_DELETION_RE.fullmatch(value)
+        or _HGVS_SINGLE_INSERTION_RE.fullmatch(value)
+    ):
+        return False
+    return any(token in value for token in INDEL_TOKENS_PRO)
 
 
 def _parse_hgvs_mut_token(token: str, hgvs_pro: str) -> MutationTuple:
@@ -297,17 +317,59 @@ def _parse_hgvs_mut_token(token: str, hgvs_pro: str) -> MutationTuple:
     return wt1, pos, mut1
 
 
-def parse_hgvs_pro(hgvs_pro: str) -> list[MutationTuple]:
-    """Parse protein HGVS strings from MaveDB."""
+def _parse_indel_residue(code: str, hgvs_pro: str) -> str:
+    """Return one supported amino-acid code for a bounded protein indel."""
+    residue = AA3_TO_AA1.get(code)
+    if residue is None or residue not in VALID_RESIDUES:
+        raise InvalidHGVSVariantError(
+            f"Unknown amino acid code: {code} in {hgvs_pro}"
+        )
+    return residue
+
+
+def _parse_hgvs_pro_edits(hgvs_pro: str) -> list[ProteinEdit]:
+    """Parse supported protein HGVS into structured internal edits."""
     hgvs_pro = str(hgvs_pro).strip()
 
     if hgvs_pro == "p.=":
         return []
 
+    deletion_match = _HGVS_SINGLE_DELETION_RE.fullmatch(hgvs_pro)
+    if deletion_match:
+        return [
+            ProteinDeletionEdit(
+                wt_aa=_parse_indel_residue(
+                    deletion_match.group("wt"),
+                    hgvs_pro,
+                ),
+                position=int(deletion_match.group("pos")),
+            )
+        ]
+
+    insertion_match = _HGVS_SINGLE_INSERTION_RE.fullmatch(hgvs_pro)
+    if insertion_match:
+        return [
+            ProteinInsertionEdit(
+                left_aa=_parse_indel_residue(
+                    insertion_match.group("left"),
+                    hgvs_pro,
+                ),
+                left_position=int(insertion_match.group("left_pos")),
+                right_aa=_parse_indel_residue(
+                    insertion_match.group("right"),
+                    hgvs_pro,
+                ),
+                right_position=int(insertion_match.group("right_pos")),
+                inserted_aa=_parse_indel_residue(
+                    insertion_match.group("inserted"),
+                    hgvs_pro,
+                ),
+            )
+        ]
+
     if hgvs_pro_is_indel(hgvs_pro):
         raise UnsupportedVariantError(
-            "Unsupported hgvs_pro (protein-level indel/frameshift/etc.) "
-            "for substitutions-only analysis."
+            "Unsupported hgvs_pro (complex protein indel/frameshift/etc.)."
         )
 
     bracket_match = HGVS_BRACKET_RE.match(hgvs_pro)
@@ -317,7 +379,7 @@ def parse_hgvs_pro(hgvs_pro: str) -> list[MutationTuple]:
         if not parts:
             raise InvalidHGVSVariantError(f"Empty hgvs_pro body: {hgvs_pro}")
         return [
-            _parse_hgvs_mut_token(part, hgvs_pro)
+            ProteinSubstitutionEdit(*_parse_hgvs_mut_token(part, hgvs_pro))
             for part in parts
             if part != "="
         ]
@@ -325,9 +387,20 @@ def parse_hgvs_pro(hgvs_pro: str) -> list[MutationTuple]:
     single_match = HGVS_SINGLE_RE.match(hgvs_pro)
     if single_match:
         token = single_match.group("single").strip()
-        return [_parse_hgvs_mut_token(token, hgvs_pro)]
+        return [ProteinSubstitutionEdit(*_parse_hgvs_mut_token(token, hgvs_pro))]
 
     raise InvalidHGVSVariantError(f"Unsupported hgvs_pro format: {hgvs_pro}")
+
+
+def parse_hgvs_pro(hgvs_pro: str) -> list[ParsedProteinEdit]:
+    """Parse protein HGVS while preserving substitution tuple results."""
+    edits = _parse_hgvs_pro_edits(hgvs_pro)
+    return [
+        (edit.wt_aa, edit.position, edit.mut_aa)
+        if isinstance(edit, ProteinSubstitutionEdit)
+        else edit
+        for edit in edits
+    ]
 
 
 def apply_mutations(
@@ -389,8 +462,78 @@ def hgvs_to_sequence(
     hgvs_pro: str,
 ) -> tuple[str, str]:
     """Convert a protein HGVS variant into mutated sequence and internal notation."""
-    muts = parse_hgvs_pro(hgvs_pro)
-    return apply_mutations(wt_seq, muts)
+    edits = _parse_hgvs_pro_edits(hgvs_pro)
+    substitutions = [
+        (edit.wt_aa, edit.position, edit.mut_aa)
+        for edit in edits
+        if isinstance(edit, ProteinSubstitutionEdit)
+    ]
+    if len(substitutions) == len(edits):
+        return apply_mutations(wt_seq, substitutions)
+    if len(edits) != 1:
+        raise UnsupportedVariantError(
+            "Protein indels cannot be combined with other edits."
+        )
+
+    sequence = str(wt_seq).upper()
+    edit = edits[0]
+    if isinstance(edit, ProteinDeletionEdit):
+        _validate_edit_reference(
+            sequence,
+            edit.wt_aa,
+            edit.position,
+            label="deletion",
+        )
+        return (
+            sequence[: edit.position - 1] + sequence[edit.position :],
+            f"{edit.wt_aa}{edit.position}del",
+        )
+    if isinstance(edit, ProteinInsertionEdit):
+        if edit.right_position != edit.left_position + 1:
+            raise MutationApplicationError(
+                "Insertion anchors must identify adjacent WT positions."
+            )
+        _validate_edit_reference(
+            sequence,
+            edit.left_aa,
+            edit.left_position,
+            label="left insertion anchor",
+        )
+        _validate_edit_reference(
+            sequence,
+            edit.right_aa,
+            edit.right_position,
+            label="right insertion anchor",
+        )
+        return (
+            sequence[: edit.left_position]
+            + edit.inserted_aa
+            + sequence[edit.left_position :],
+            f"{edit.left_aa}{edit.left_position}_"
+            f"{edit.right_aa}{edit.right_position}ins{edit.inserted_aa}",
+        )
+    raise UnsupportedVariantError("Unsupported protein edit.")
+
+
+def _validate_edit_reference(
+    wt_seq: str,
+    expected_aa: str,
+    position: int,
+    *,
+    label: str,
+) -> None:
+    """Validate one referenced residue before applying a protein edit."""
+    if position < 1 or position > len(wt_seq):
+        raise MutationApplicationError(
+            f"{label.capitalize()} position {position} out of range for "
+            f"WT length {len(wt_seq)}."
+        )
+    observed_aa = wt_seq[position - 1]
+    if observed_aa != expected_aa:
+        raise MutationApplicationError(
+            f"WT mismatch at pos {position}: {label} expects {expected_aa}, "
+            f"WT has {observed_aa}."
+        )
 
 
 def parse_mavedb_hgvs_series(
