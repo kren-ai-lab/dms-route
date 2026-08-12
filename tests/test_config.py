@@ -235,6 +235,9 @@ def test_reference_config_preserves_source_contracts_and_transform_defaults() ->
 
     for source in (proteingym, mavedb):
         defaults = source["default_build_kwargs"]
+        assert "wt_sequence_is_dna" not in defaults
+        assert "dna_frame" not in defaults
+        assert "stop_at_stop" not in defaults
         assert defaults["add_relative_score"] is False
         assert defaults["add_binary_label"] is False
         assert defaults["add_wildtype_row"] is False

@@ -512,6 +512,12 @@ strictly positive. Generated score and label columns cannot replace
 `score_raw`, standardized structural fields, or existing source columns. A
 requested unsafe transform fails before publication.
 
+The Python builders likewise treat `wt_sequence` as a protein-sequence
+fallback, and `wt_fasta_path` must identify a single protein WT sequence.
+Neither manual input is automatically translated from DNA. DNA supplied in
+MaveDB source metadata is still normalized to protein automatically and
+internally before standardization.
+
 Synthetic WT insertion remains separate from score resolution. The generated
 row is marked `is_synthetic: true`, retains a missing `score_raw`, and is never
 presented as an experimental observation. Summary files record WT sequence and

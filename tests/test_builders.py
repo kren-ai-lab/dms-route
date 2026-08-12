@@ -66,6 +66,20 @@ def test_builder_score_transform_defaults_are_disabled(builder):
 
 
 @pytest.mark.parametrize(
+    "builder",
+    [build_mavedb_dataset, build_proteingym_dataset],
+)
+def test_builder_dna_options_are_absent(builder) -> None:
+    parameters = signature(builder).parameters
+
+    assert not {
+        "wt_sequence_is_dna",
+        "dna_frame",
+        "stop_at_stop",
+    }.intersection(parameters)
+
+
+@pytest.mark.parametrize(
     "options",
     [
         {"add_relative_score": True, "relative_output_col": "score_raw"},
@@ -598,43 +612,38 @@ def test_build_mavedb_dataset_drop_failed(tmp_path, wt_sequence: str):
     assert result.iloc[0]["status"] == "OK"
 
 
-def test_build_proteingym_dataset_with_fasta(tmp_path, proteingym_like_df: pd.DataFrame, wt_sequence: str):
-    csv_path = tmp_path / "proteingym.csv"
-    proteingym_like_df.to_csv(csv_path, index=False)
-
+@pytest.mark.parametrize("source", ["mavedb", "proteingym"])
+def test_builder_accepts_protein_fasta(
+    tmp_path,
+    source: str,
+    wt_sequence: str,
+) -> None:
     fasta_path = tmp_path / "wt.fasta"
     fasta_path.write_text(f">wt\n{wt_sequence}\n", encoding="utf-8")
 
-    result = build_proteingym_dataset(
-        input_path=csv_path,
-        score_col="DMS_score",
-        variant_col="variant",
+    result = _build_source_dataset(
+        tmp_path,
+        source,
+        _source_variants(source, include_wt=True),
+        [1.0, 0.5],
         wt_fasta_path=fasta_path,
     )
 
     assert (result["wt_sequence"] == wt_sequence).all()
 
 
-def test_build_proteingym_dataset_with_dna_wt(tmp_path):
-    df = pd.DataFrame(
-        {
-            "variant": ["WT", "M1A"],
-            "DMS_score": [1.0, 0.5],
-        }
-    )
-    csv_path = tmp_path / "proteingym.csv"
-    df.to_csv(csv_path, index=False)
-
-    dna_wt = "ATGAAAACC"  # MKT
-
-    result = build_proteingym_dataset(
-        input_path=csv_path,
-        score_col="DMS_score",
-        variant_col="variant",
-        wt_sequence=dna_wt,
-        wt_sequence_is_dna=True,
-        add_relative_score=True,
+@pytest.mark.parametrize("source", ["mavedb", "proteingym"])
+def test_builder_preserves_dna_looking_manual_protein_sequence(
+    tmp_path,
+    source: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        source,
+        _source_variants(source, include_wt=True)[:1],
+        [1.0],
+        wt_sequence="ACGT",
     )
 
-    assert result.iloc[0]["wt_sequence"] == "MKT"
-    assert result.iloc[1]["mutated_sequence"] == "AKT"
+    assert result.iloc[0]["wt_sequence"] == "ACGT"
+    assert result.iloc[0]["mutated_sequence"] == "ACGT"

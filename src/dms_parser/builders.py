@@ -23,7 +23,6 @@ from dms_parser.parsing import (
     is_wildtype_variant,
     parse_variant_series,
     read_fasta_one,
-    translate_dna,
     variant_to_sequence,
 )
 from dms_parser.transforms import add_pseudo_binary_label, add_wt_relative_score
@@ -69,32 +68,22 @@ def _validate_builder_standardization_options(
 def _resolve_wt_sequence(
     wt_sequence: str | None = None,
     wt_fasta_path: str | Path | None = None,
-    wt_sequence_is_dna: bool = False,
-    dna_frame: int = 1,
-    stop_at_stop: bool = True,
 ) -> str:
     """Resolve WT sequence from direct string or FASTA."""
     if wt_sequence is None and wt_fasta_path is None:
         raise ValueError("Either wt_sequence or wt_fasta_path must be provided.")
 
     strategy = "provided_sequence" if wt_sequence is not None else "fasta_file"
-    logger.debug("Resolving WT sequence strategy=%s dna_input=%s", strategy, wt_sequence_is_dna)
+    logger.debug("Resolving WT sequence strategy=%s", strategy)
     if wt_sequence is None:
         _, wt_sequence = read_fasta_one(str(wt_fasta_path))
 
     wt_sequence = str(wt_sequence).strip().upper()
-
-    if wt_sequence_is_dna:
-        wt_sequence = translate_dna(
-            wt_sequence,
-            frame=dna_frame,
-            stop_at_stop=stop_at_stop,
-        )
-
     validate_wt_sequence(wt_sequence)
     logger.debug(
-        "Resolved WT sequence strategy=%s translated_from_dna=%s length=%d",
-        strategy, wt_sequence_is_dna, len(wt_sequence),
+        "Resolved WT sequence strategy=%s length=%d",
+        strategy,
+        len(wt_sequence),
     )
     return wt_sequence
 
@@ -438,9 +427,6 @@ def build_mavedb_dataset(
     uniprot_id: str | None = None,
     wt_sequence: str | None = None,
     wt_fasta_path: str | Path | None = None,
-    wt_sequence_is_dna: bool = False,
-    dna_frame: int = 1,
-    stop_at_stop: bool = True,
     sep: str | None = None,
     add_relative_score: bool = False,
     relative_method: str = "log_ratio",
@@ -488,9 +474,6 @@ def build_mavedb_dataset(
     wt_seq = _resolve_wt_sequence(
         wt_sequence=wt_sequence,
         wt_fasta_path=wt_fasta_path,
-        wt_sequence_is_dna=wt_sequence_is_dna,
-        dna_frame=dna_frame,
-        stop_at_stop=stop_at_stop,
     )
     wt_sequence_provenance = (
         "provided_sequence" if wt_sequence is not None else "fasta_file"
@@ -535,9 +518,6 @@ def build_proteingym_dataset(
     uniprot_id: str | None = None,
     wt_sequence: str | None = None,
     wt_fasta_path: str | Path | None = None,
-    wt_sequence_is_dna: bool = False,
-    dna_frame: int = 1,
-    stop_at_stop: bool = True,
     sep: str | None = None,
     strict_variant_parsing: bool = False,
     add_relative_score: bool = False,
@@ -587,9 +567,6 @@ def build_proteingym_dataset(
     wt_seq = _resolve_wt_sequence(
         wt_sequence=wt_sequence,
         wt_fasta_path=wt_fasta_path,
-        wt_sequence_is_dna=wt_sequence_is_dna,
-        dna_frame=dna_frame,
-        stop_at_stop=stop_at_stop,
     )
     wt_sequence_provenance = (
         "provided_sequence" if wt_sequence is not None else "fasta_file"

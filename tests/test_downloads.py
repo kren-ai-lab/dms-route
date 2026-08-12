@@ -163,6 +163,34 @@ def test_legacy_mavedb_score_column_remains_supported(tmp_path: Path) -> None:
     assert table["mutated_sequence"].tolist() == ["MKT", "AKT"]
 
 
+def test_mavedb_dna_target_sequence_is_translated_before_standardization(
+    tmp_path: Path,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-4"
+    scores_path = tmp_path / "scores.csv"
+    scores_path.write_text(
+        "hgvs_pro,score\np.=,1.0\np.Met1Ala,0.5\n",
+        encoding="utf-8",
+    )
+    metadata = _snapshot_score_set(dataset_id)
+    metadata["targetSequence"] = {"sequence": "ATGAAAACC"}
+
+    built, _ = downloads_module._build_mavedb_download(
+        dataset_id,
+        downloads_module._MaveDBDownloadInput(
+            scores_path=scores_path,
+            metadata=metadata,
+            provenance={},
+        ),
+        drop_failed=False,
+        add_wildtype_row=False,
+        standardization=downloads_module._StandardizationOptions(),
+    )
+
+    assert built["wt_sequence"].tolist() == ["MKT", "MKT"]
+    assert built["mutated_sequence"].tolist() == ["MKT", "AKT"]
+
+
 @pytest.mark.parametrize(
     "table",
     [
