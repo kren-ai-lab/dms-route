@@ -31,7 +31,11 @@ from dms_parser._wildtype import (
     resolve_wt_sequence,
     validate_standardization_options,
 )
-from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
+from dms_parser.builders import (
+    build_mavedb_dataset,
+    build_proteingym_dataset,
+    build_proteingym_indel_dataset,
+)
 from dms_parser.cache import FilesystemCache
 from dms_parser.catalog import (
     DatasetRecord,
@@ -66,8 +70,12 @@ from dms_parser.sources.proteingym_resources import get_proteingym_resource
 
 logger = logging.getLogger(__name__)
 
+_PROTEINGYM_BENCHMARK_CACHE_IDS = {
+    "substitutions": "resource-data-dms-substitutions",
+    "indels": "resource-data-dms-indels",
+}
 _PROTEINGYM_SUBSTITUTIONS_BENCHMARK_CACHE_ID = (
-    "resource-data-dms-substitutions"
+    _PROTEINGYM_BENCHMARK_CACHE_IDS["substitutions"]
 )
 _MAVEDB_METADATA_CACHE_SOURCE = "mavedb-metadata"
 _PORTABLE_DATASET_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
@@ -206,9 +214,14 @@ def download_and_standardize_dataset(
     acquisition: str | None = None,
     snapshot_record_id: str | None = None,
     include_superseded: bool = False,
+    variant_type: str = "substitutions",
 ) -> DatasetDownloadResult:
-    """Download and standardize one substitutions dataset without YAML config."""
+    """Download and standardize one dataset without YAML configuration."""
     validate_source_dataset_id(source, dataset_id)
+    selected_variant_type = _validate_download_variant_type(
+        source,
+        variant_type,
+    )
     acquisition_method = _validate_download_acquisition(
         source,
         acquisition=acquisition,
@@ -252,6 +265,7 @@ def download_and_standardize_dataset(
     if source == "proteingym":
         built_table, summary = _download_proteingym_dataset(
             dataset_id,
+            variant_type=selected_variant_type,
             cache=cache,
             refresh=refresh,
             drop_failed=drop_failed,
@@ -311,8 +325,13 @@ def download_and_standardize_datasets(
     acquisition: str | None = None,
     snapshot_record_id: str | None = None,
     include_superseded: bool = False,
+    variant_type: str = "substitutions",
 ) -> DatasetBatchDownloadResult:
-    """Download and standardize an ordered batch from one substitutions source."""
+    """Download and standardize an ordered batch from one source."""
+    selected_variant_type = _validate_download_variant_type(
+        source,
+        variant_type,
+    )
     acquisition_method = _validate_download_acquisition(
         source,
         acquisition=acquisition,
@@ -351,6 +370,7 @@ def download_and_standardize_datasets(
     if source == "proteingym":
         entries = _download_proteingym_batch(
             plan,
+            variant_type=selected_variant_type,
             cache=cache,
             refresh=refresh,
             drop_failed=drop_failed,
@@ -474,6 +494,22 @@ def _validate_download_acquisition(
             "include_superseded requires acquisition='snapshot'."
         )
     return method
+
+
+def _validate_download_variant_type(source: str, variant_type: str) -> str:
+    """Validate direct-download ProteinGym resource selection."""
+    if (
+        not isinstance(variant_type, str)
+        or variant_type not in _PROTEINGYM_BENCHMARK_CACHE_IDS
+    ):
+        raise InvalidPipelineOptionError(
+            "variant_type must be 'substitutions' or 'indels'."
+        )
+    if source == "mavedb" and variant_type == "indels":
+        raise InvalidPipelineOptionError(
+            "variant_type='indels' is supported only for ProteinGym."
+        )
+    return variant_type
 
 
 def _standardization_options(
@@ -856,6 +892,7 @@ def _download_mavedb_snapshot_batch(
 def _download_proteingym_batch(
     plan: _DatasetBatchPlan,
     *,
+    variant_type: str,
     cache: FilesystemCache,
     refresh: bool,
     drop_failed: bool,
@@ -869,7 +906,7 @@ def _download_proteingym_batch(
     try:
         records = list_datasets(
             "proteingym",
-            variant_type="substitutions",
+            variant_type=variant_type,
             cache=cache,
             refresh=refresh,
         )
@@ -941,6 +978,7 @@ def _download_proteingym_batch(
     if resolved_metadata:
         try:
             benchmark_table = _acquire_proteingym_benchmark(
+                variant_type=variant_type,
                 cache=cache,
                 refresh=refresh,
             )
@@ -988,6 +1026,7 @@ def _download_proteingym_batch(
                         dataset_id,
                         resolved_metadata[dataset_id],
                         experiment_table,
+                        variant_type=variant_type,
                         drop_failed=drop_failed,
                         add_wildtype_row=add_wildtype_row,
                         standardization=_options_for_dataset(
@@ -1028,6 +1067,7 @@ def _download_proteingym_batch(
 def _download_proteingym_dataset(
     dataset_id: str,
     *,
+    variant_type: str,
     cache: FilesystemCache,
     refresh: bool,
     drop_failed: bool,
@@ -1038,7 +1078,7 @@ def _download_proteingym_dataset(
     metadata_record = get_dataset_metadata(
         "proteingym",
         dataset_id,
-        variant_type="substitutions",
+        variant_type=variant_type,
         cache=cache,
         refresh=refresh,
     )
@@ -1048,6 +1088,7 @@ def _download_proteingym_dataset(
         wt_sequence=standardization.wt_sequence,
     )
     benchmark_table = _acquire_proteingym_benchmark(
+        variant_type=variant_type,
         cache=cache,
         refresh=refresh,
     )
@@ -1062,6 +1103,7 @@ def _download_proteingym_dataset(
         dataset_id,
         metadata,
         experiment_table,
+        variant_type=variant_type,
         drop_failed=drop_failed,
         add_wildtype_row=add_wildtype_row,
         standardization=standardization,
@@ -1098,24 +1140,25 @@ def _resolve_proteingym_download_metadata(
 
 def _acquire_proteingym_benchmark(
     *,
+    variant_type: str,
     cache: FilesystemCache,
     refresh: bool,
 ) -> pd.DataFrame:
-    """Acquire and validate the shared ProteinGym substitutions benchmark."""
+    """Acquire and validate the selected shared ProteinGym benchmark."""
     resource = get_proteingym_resource(
-        "dms_substitutions",
+        f"dms_{variant_type}",
         require_processing=True,
     )
     benchmark_path = download_proteingym_dataset(
         resource.data_url,
         cache=cache,
-        dataset_id=_PROTEINGYM_SUBSTITUTIONS_BENCHMARK_CACHE_ID,
+        dataset_id=_PROTEINGYM_BENCHMARK_CACHE_IDS[variant_type],
         refresh=refresh,
     )
     benchmark_table = read_table(benchmark_path)
     if "DMS_id" not in benchmark_table.columns:
         raise InvalidDatasetError(
-            "ProteinGym substitutions benchmark is missing the 'DMS_id' column."
+            f"ProteinGym {variant_type} benchmark is missing the 'DMS_id' column."
         )
     return benchmark_table
 
@@ -1125,6 +1168,7 @@ def _build_proteingym_download(
     metadata: _ProteinGymDownloadMetadata,
     experiment_table: pd.DataFrame,
     *,
+    variant_type: str,
     drop_failed: bool,
     add_wildtype_row: bool,
     standardization: _StandardizationOptions,
@@ -1133,10 +1177,21 @@ def _build_proteingym_download(
     with TemporaryDirectory(prefix="dms-parser-download-") as temporary_dir:
         selected_path = Path(temporary_dir) / "selected.csv"
         write_table(experiment_table, selected_path, index=False)
-        built_table = build_proteingym_dataset(
+        builder = (
+            build_proteingym_dataset
+            if variant_type == "substitutions"
+            else build_proteingym_indel_dataset
+        )
+        builder_kwargs = {
+            "variant_col": "mutant"
+        } if variant_type == "substitutions" else {
+            "mutated_sequence_col": "mutated_sequence",
+            "target_sequence_col": "target_seq",
+        }
+        built_table = builder(
             input_path=selected_path,
             score_col="DMS_score",
-            variant_col="mutant",
+            **builder_kwargs,
             dataset_id=dataset_id,
             protein_id=metadata.protein_id,
             gene=metadata.gene,
