@@ -148,6 +148,26 @@ def test_parse_hgvs_pro_multi():
     assert result == [("M", 1, "A"), ("K", 2, "R")]
 
 
+@pytest.mark.parametrize(
+    ("hgvs_pro", "expected"),
+    [
+        ("p.[=]", []),
+        ("p.[=;=]", []),
+        ("p.[Asp1Glu;=]", [("D", 1, "E")]),
+        ("p.[=;Gln31His]", [("Q", 31, "H")]),
+        (
+            "p.[Asp1Glu;=;Gln31His]",
+            [("D", 1, "E"), ("Q", 31, "H")],
+        ),
+    ],
+)
+def test_parse_hgvs_pro_ignores_bracketed_equality_components(
+    hgvs_pro: str,
+    expected: list[tuple[str, int, str]],
+) -> None:
+    assert parse_hgvs_pro(hgvs_pro) == expected
+
+
 def test_parse_hgvs_pro_synonymous():
     result = parse_hgvs_pro("p.Met1=")
     assert result == [("M", 1, "M")]
@@ -173,14 +193,19 @@ def test_hgvs_position_equality_is_not_complete_wildtype(wt_sequence: str):
     assert is_wildtype_variant(variant) is False
 
 
-def test_parse_hgvs_pro_invalid_raises():
+@pytest.mark.parametrize("hgvs_pro", ["p.invalid", "p.[=;invalid]"])
+def test_parse_hgvs_pro_invalid_raises(hgvs_pro: str) -> None:
     with pytest.raises(InvalidHGVSVariantError):
-        parse_hgvs_pro("p.invalid")
+        parse_hgvs_pro(hgvs_pro)
 
 
-def test_parse_hgvs_pro_unsupported_raises():
+@pytest.mark.parametrize(
+    "hgvs_pro",
+    ["p.Gly10del", "p.[=;Gly10del]", "p.[Gly10fs;=]"],
+)
+def test_parse_hgvs_pro_unsupported_raises(hgvs_pro: str) -> None:
     with pytest.raises(UnsupportedVariantError):
-        parse_hgvs_pro("p.Gly10del")
+        parse_hgvs_pro(hgvs_pro)
 
 
 def test_apply_mutations(wt_sequence: str):
@@ -224,6 +249,27 @@ def test_hgvs_to_sequence(wt_sequence: str):
 
     assert mutated[0] == "A"
     assert variant == "M1A"
+
+
+@pytest.mark.parametrize(
+    ("hgvs_pro", "expected_sequence", "expected_variant"),
+    [
+        ("p.[=;=]", "DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ", ""),
+        ("p.[Asp1Glu;=]", "EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ", "D1E"),
+        ("p.[=;Gln31His]", "DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH", "Q31H"),
+    ],
+)
+def test_hgvs_to_sequence_ignores_bracketed_equality_components(
+    hgvs_pro: str,
+    expected_sequence: str,
+    expected_variant: str,
+) -> None:
+    wt_sequence = "DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ"
+
+    assert hgvs_to_sequence(wt_sequence, hgvs_pro) == (
+        expected_sequence,
+        expected_variant,
+    )
 
 
 def test_parse_mavedb_hgvs_series():

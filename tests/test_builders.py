@@ -313,6 +313,54 @@ def test_mavedb_complete_identity_builds_observed_wt(
     assert observed["score_raw"] == 2.5
 
 
+@pytest.mark.parametrize("hgvs_pro", ["p.[=]", "p.[=;=]"])
+def test_mavedb_bracketed_equality_builds_observed_wt(
+    hgvs_pro: str,
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        "mavedb",
+        [hgvs_pro],
+        [2.5],
+        wt_sequence=wt_sequence,
+    )
+
+    observed = result.iloc[0]
+    assert observed["status"] == "OK"
+    assert observed["variant"] == ""
+    assert observed["mutated_sequence"] == wt_sequence
+    assert observed["is_wildtype"] == True
+    assert observed["n_mutations"] == 0
+    assert observed["is_synthetic"] == False
+    assert observed["score_raw"] == 2.5
+
+
+def test_mavedb_mixed_equality_builds_only_substitutions(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        "mavedb",
+        ["p.[=;Met1Ala]", "p.[Met1Ala;=;Lys2Arg]"],
+        [0.8, 1.2],
+        wt_sequence=wt_sequence,
+    )
+
+    assert result["status"].tolist() == ["OK", "OK"]
+    assert result["variant"].tolist() == ["M1A", "M1A;K2R"]
+    assert result["n_mutations"].tolist() == [1, 2]
+    assert result["is_wildtype"].tolist() == [False, False]
+    assert result["is_synthetic"].tolist() == [False, False]
+    assert result["score_raw"].tolist() == [0.8, 1.2]
+    assert result["mutated_sequence"].tolist() == [
+        "AKTAYIAKQRQISFVKSHFSRQDILDLWQ",
+        "ARTAYIAKQRQISFVKSHFSRQDILDLWQ",
+    ]
+
+
 def test_drop_failed_precedes_synthetic_wt_insertion(
     tmp_path,
     wt_sequence: str,
@@ -571,8 +619,8 @@ def test_build_mavedb_dataset_basic(tmp_path, mavedb_like_df: pd.DataFrame, wt_s
 def test_build_mavedb_dataset_with_unsupported_variant(tmp_path, wt_sequence: str):
     df = pd.DataFrame(
         {
-            "hgvs_pro": ["p.Met1Ala", "p.Gly10del"],
-            "score": [0.8, 0.2],
+            "hgvs_pro": ["p.Met1Ala", "p.Gly10del", "p.[=;Gly10del]"],
+            "score": [0.8, 0.2, 0.1],
         }
     )
     path = tmp_path / "mavedb.csv"
@@ -586,7 +634,7 @@ def test_build_mavedb_dataset_with_unsupported_variant(tmp_path, wt_sequence: st
         add_relative_score=False,
     )
 
-    assert list(result["status"]) == ["OK", "Unsupported"]
+    assert list(result["status"]) == ["OK", "Unsupported", "Unsupported"]
 
 
 def test_build_mavedb_dataset_drop_failed(tmp_path, wt_sequence: str):

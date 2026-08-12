@@ -78,7 +78,8 @@ The standardization workflow supports amino-acid substitutions, including
 multi-mutants. ProteinGym-style variants such as `A23V` and `A23V;G45D` and
 MaveDB protein HGVS variants such as `p.Met1Ala` and
 `p.[Met1Ala;Lys2Arg]` are supported. MaveDB complete-target identity (`p.=`)
-is treated as wild type.
+is treated as wild type. Equality-only bracketed expressions also represent
+protein wild type, while equality components in mixed brackets add no mutation.
 
 Insertions, deletions, duplications, frameshifts, extensions, and other
 non-substitution variants are not standardized.

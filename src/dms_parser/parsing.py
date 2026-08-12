@@ -316,7 +316,11 @@ def parse_hgvs_pro(hgvs_pro: str) -> list[MutationTuple]:
         parts = [part.strip() for part in body.split(";") if part.strip()]
         if not parts:
             raise InvalidHGVSVariantError(f"Empty hgvs_pro body: {hgvs_pro}")
-        return [_parse_hgvs_mut_token(part, hgvs_pro) for part in parts]
+        return [
+            _parse_hgvs_mut_token(part, hgvs_pro)
+            for part in parts
+            if part != "="
+        ]
 
     single_match = HGVS_SINGLE_RE.match(hgvs_pro)
     if single_match:
