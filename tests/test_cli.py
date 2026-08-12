@@ -1990,7 +1990,7 @@ def test_download_help_excludes_deferred_options(
 
     assert exc_info.value.code == 0
     output = capsys.readouterr().out
-    assert "--variant-type" not in output
+    assert "--variant-type" in output
     assert "--keep-failed" not in output
     assert "--acquisition" in output
     assert "api" in output and "snapshot" in output
@@ -1999,6 +1999,7 @@ def test_download_help_excludes_deferred_options(
     assert "MaveDB-only" in output
     assert "prefetched" in output
     assert "1.9 GB" in output
+    assert "Download and standardize one dataset." in output
 
 
 @pytest.mark.parametrize(
@@ -2173,6 +2174,7 @@ def test_download_forwards_defaults_and_uses_default_cache(
         "acquisition": None,
         "snapshot_record_id": None,
         "include_superseded": False,
+        "variant_type": "substitutions",
     }
     assert isinstance(calls["cache"], FilesystemCache)
     assert calls["cache"].root == cache_root
@@ -2182,6 +2184,40 @@ def test_download_forwards_defaults_and_uses_default_cache(
     assert str(output_dir / "standardized.csv") in caplog.text
     assert str(output_dir / "summary.csv") in caplog.text
     assert str(output_dir / "summary.json") in caplog.text
+
+    calls.clear()
+    assert cli_module.main(
+        [
+            "download",
+            "--source",
+            "proteingym",
+            "--variant-type",
+            "indels",
+            "--dataset-id",
+            "ASSAY_1",
+            "--output-dir",
+            str(output_dir),
+        ]
+    ) == 0
+    assert calls["variant_type"] == "indels"
+
+    calls.clear()
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(
+            [
+                "download",
+                "--source",
+                "mavedb",
+                "--variant-type",
+                "indels",
+                "--dataset-id",
+                "urn:mavedb:00000001-a-1",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+    assert exc_info.value.code == 2
+    assert calls == {}
 
 
 def test_download_forwards_explicit_options_and_expands_paths(
@@ -2416,12 +2452,12 @@ def test_download_many_help_excludes_deferred_options(
         "--continue-on-error",
         "--fail-fast",
         "--jobs",
-        "--variant-type",
         "--keep-failed",
         "--all",
         "--query",
     ):
         assert option not in output
+    assert "--variant-type" in output
     assert "--acquisition" in output
     assert "api" in output and "snapshot" in output
     assert "--snapshot-record" in output
@@ -2432,6 +2468,7 @@ def test_download_many_help_excludes_deferred_options(
     assert "UTF-8 text file" in normalized
     assert "one dataset identifier per line" in normalized
     assert "blank lines are ignored" in normalized
+    assert "Download and standardize several datasets." in output
 
 
 def _capture_download_many_call(
@@ -2843,8 +2880,43 @@ def test_download_many_forwards_defaults_order_and_default_cache(
     assert calls["acquisition"] is None
     assert calls["snapshot_record_id"] is None
     assert calls["include_superseded"] is False
+    assert calls["variant_type"] == "substitutions"
     assert not cache_root.exists()
     assert capsys.readouterr().out == ""
+
+    calls.clear()
+    assert cli_module.main(
+        [
+            "download-many",
+            "--source",
+            "proteingym",
+            "--variant-type",
+            "indels",
+            "--dataset-id",
+            "ASSAY_1",
+            "--output-dir",
+            str(output_dir),
+        ]
+    ) == 0
+    assert calls["variant_type"] == "indels"
+
+    calls.clear()
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(
+            [
+                "download-many",
+                "--source",
+                "mavedb",
+                "--variant-type",
+                "indels",
+                "--dataset-id",
+                "urn:mavedb:00000001-a-1",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+    assert exc_info.value.code == 2
+    assert calls == {}
 
 
 def test_download_many_forwards_explicit_options_and_expands_paths(

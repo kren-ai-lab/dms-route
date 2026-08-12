@@ -30,6 +30,7 @@ from dms_parser.downloads import (
     _standardization_options,
     _validate_batch_fallbacks,
     _validate_download_acquisition,
+    _validate_download_variant_type,
     _validate_dataset_batch_request,
     download_and_standardize_dataset,
     download_and_standardize_datasets,
@@ -106,7 +107,7 @@ class _OutputFormat(str, Enum):
 
 
 class _VariantType(str, Enum):
-    """ProteinGym catalog variant-type filters."""
+    """ProteinGym dataset family selections."""
 
     substitutions = "substitutions"
     indels = "indels"
@@ -622,7 +623,7 @@ def _download_options_help() -> str:
 
 @app.command(
     "download",
-    help="Download and standardize one substitutions dataset.",
+    help="Download and standardize one dataset.",
     context_settings=_HELP_CONTEXT,
 )
 def _download_command(
@@ -643,6 +644,16 @@ def _download_command(
             metavar="OUTPUT_DIR",
         ),
     ],
+    variant_type: Annotated[
+        _VariantType,
+        typer.Option(
+            "--variant-type",
+            help=(
+                "Select the ProteinGym dataset family; this does not filter "
+                "MaveDB score-set rows."
+            ),
+        ),
+    ] = _VariantType.substitutions,
     cache_dir: Annotated[
         Path | None,
         typer.Option(
@@ -738,9 +749,11 @@ def _download_command(
     """Download and standardize one source dataset."""
     _start_command(log_level)
     source_name = source.value
+    variant_type_name = variant_type.value
     acquisition_name = acquisition.value if acquisition is not None else None
     try:
         validate_source_dataset_id(source_name, dataset_id)
+        _validate_download_variant_type(source_name, variant_type_name)
         _validate_download_acquisition(
             source_name,
             acquisition=acquisition_name,
@@ -783,6 +796,7 @@ def _download_command(
             acquisition=acquisition_name,
             snapshot_record_id=snapshot_record,
             include_superseded=include_superseded,
+            variant_type=variant_type_name,
         )
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("Dataset download failed: %s", exc)
@@ -798,7 +812,7 @@ def _download_command(
 
 @app.command(
     "download-many",
-    help="Download and standardize several substitutions datasets.",
+    help="Download and standardize several datasets.",
     context_settings=_HELP_CONTEXT,
 )
 def _download_many_command(
@@ -831,6 +845,16 @@ def _download_many_command(
             ),
         ),
     ] = None,
+    variant_type: Annotated[
+        _VariantType,
+        typer.Option(
+            "--variant-type",
+            help=(
+                "Select the ProteinGym dataset family; this does not filter "
+                "MaveDB score-set rows."
+            ),
+        ),
+    ] = _VariantType.substitutions,
     cache_dir: Annotated[
         Path | None,
         typer.Option(
@@ -924,6 +948,7 @@ def _download_many_command(
     """Download and standardize an ordered batch from one source."""
     _start_command(log_level)
     source_name = source.value
+    variant_type_name = variant_type.value
     acquisition_name = acquisition.value if acquisition is not None else None
     resolved_output_dir = output_dir.expanduser()
     resolved_dataset_id_file = (
@@ -964,6 +989,7 @@ def _download_many_command(
             resolved_dataset_ids,
             field="wt_score",
         )
+        _validate_download_variant_type(source_name, variant_type_name)
         _validate_download_acquisition(
             source_name,
             acquisition=acquisition_name,
@@ -1023,6 +1049,7 @@ def _download_many_command(
             acquisition=acquisition_name,
             snapshot_record_id=snapshot_record,
             include_superseded=include_superseded,
+            variant_type=variant_type_name,
         )
     except (DMSParserError, requests.RequestException, OSError) as exc:
         logger.error("Dataset batch download failed: %s", exc)

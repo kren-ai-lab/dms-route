@@ -60,14 +60,14 @@ The equivalent ProteinGym workflow uses its canonical `DMS_id`:
 ```bash
 dms-parser download \
     --source proteingym \
-    --dataset-id BLAT_ECOLX_Jacquier_2013 \
-    --output-dir datasets/blat-jacquier
+    --variant-type indels \
+    --dataset-id ASSAY_DMS_ID \
+    --output-dir datasets/assay-indels
 ```
 
-This command uses ProteinGym's shared substitutions resources. ProteinGym
-indels use the separate `dms_indels` resource described below. MaveDB downloads
-one score set from the public API unless snapshot acquisition is selected
-explicitly.
+ProteinGym direct downloads use substitutions by default. The example's
+`--variant-type indels` selects its shared indel resources. MaveDB downloads one
+score set from the public API unless snapshot acquisition is selected explicitly.
 
 ## Supported data
 
@@ -91,9 +91,6 @@ remain unsupported.
 ProteinGym's `dms_indels` resource treats `mutated_sequence` as the
 authoritative observed sequence. DMS Parser preserves it without inferring an
 HGVS expression or unique indel coordinates.
-
-The `download` and `download-many` CLI commands remain substitution-oriented;
-use the YAML pipeline below to process ProteinGym indels from the CLI.
 
 ## Command-line workflows
 
