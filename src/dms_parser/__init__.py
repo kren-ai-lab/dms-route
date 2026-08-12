@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
+from dms_parser.builders import (
+    build_mavedb_dataset,
+    build_proteingym_dataset,
+    build_proteingym_indel_dataset,
+)
 from dms_parser.cache import CacheManifest, FilesystemCache
 from dms_parser.cache_inventory import (
     CacheInventoryArtifact,
@@ -134,6 +138,7 @@ logger.addHandler(logging.NullHandler())
 __all__ = [
     "build_mavedb_dataset",
     "build_proteingym_dataset",
+    "build_proteingym_indel_dataset",
     "DatasetRecord",
     "MaveDBCatalog",
     "MaveDBSnapshot",

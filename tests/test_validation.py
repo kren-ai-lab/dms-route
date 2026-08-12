@@ -159,6 +159,60 @@ def test_validate_standard_dataset_passes(standardized_dataset: pd.DataFrame):
     )
 
 
+def test_authoritative_sequence_mode_alone_allows_all_null_variants():
+    df = pd.DataFrame(
+        {
+            "dataset_id": ["assay"],
+            "source": ["proteingym"],
+            "protein_id": [None],
+            "gene": [None],
+            "uniprot_id": [None],
+            "score_raw": [0.5],
+            "variant": [None],
+            "is_wildtype": [False],
+            "is_synthetic": [False],
+            "n_mutations": [None],
+            "wt_sequence": ["MKT"],
+            "mutated_sequence": ["MT"],
+            "status": ["OK"],
+            "error": [""],
+        }
+    )
+
+    with pytest.raises(InvalidDatasetError):
+        validate_standard_dataset(df, require_status=True)
+
+    validate_standard_dataset(
+        df,
+        require_status=True,
+        authoritative_sequence_mode=True,
+    )
+
+
+def test_authoritative_sequence_mode_validates_ok_mutant_sequences():
+    df = pd.DataFrame(
+        {
+            "dataset_id": ["assay"],
+            "source": ["proteingym"],
+            "protein_id": [None],
+            "gene": [None],
+            "uniprot_id": [None],
+            "score_raw": [0.5],
+            "variant": [None],
+            "is_wildtype": [False],
+            "is_synthetic": [False],
+            "n_mutations": [None],
+            "wt_sequence": ["MKT"],
+            "mutated_sequence": ["MJ"],
+            "status": ["OK"],
+            "error": [""],
+        }
+    )
+
+    with pytest.raises(InvalidDatasetError):
+        validate_standard_dataset(df, authoritative_sequence_mode=True)
+
+
 def test_has_wildtype_row(standardized_dataset: pd.DataFrame):
     assert has_wildtype_row(standardized_dataset) is True
 

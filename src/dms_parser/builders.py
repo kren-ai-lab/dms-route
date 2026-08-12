@@ -10,6 +10,7 @@ import pandas as pd
 
 from dms_parser._wildtype import (
     WildTypeResolution,
+    resolve_wt_sequence,
     resolve_wt_score,
     set_wt_resolution,
     validate_standardization_options,
@@ -17,7 +18,9 @@ from dms_parser._wildtype import (
 from dms_parser.exceptions import (
     InvalidDatasetError,
     MissingWildTypeError,
+    SequenceValidationError,
     UnsupportedVariantError,
+    WildTypeConflictError,
 )
 from dms_parser.io import read_table
 from dms_parser.parsing import (
@@ -160,6 +163,97 @@ def _safe_variant_to_sequence(
     return out
 
 
+def _safe_authoritative_sequence(
+    wt_sequence: str,
+    mutated_sequence: Any,
+) -> SequenceBuildResult:
+    """Normalize one source-authoritative ProteinGym mutant sequence."""
+    out: SequenceBuildResult = {
+        "variant": None,
+        "mutated_sequence": None,
+        "status": "OK",
+        "error": "",
+        "is_wildtype": False,
+        "n_mutations": None,
+    }
+
+    try:
+        if not isinstance(mutated_sequence, str) or not mutated_sequence.strip():
+            raise SequenceValidationError(
+                "Mutated sequence must be a non-empty protein sequence."
+            )
+        sequence = mutated_sequence.strip().upper()
+        validate_wt_sequence(sequence)
+        is_wildtype = sequence == wt_sequence
+        out["mutated_sequence"] = sequence
+        out["is_wildtype"] = is_wildtype
+        out["n_mutations"] = 0 if is_wildtype else None
+    except Exception as exc:
+        out["status"] = "Error"
+        out["error"] = str(exc)
+
+    return out
+
+
+def _resolve_proteingym_indel_wt(
+    df: pd.DataFrame,
+    *,
+    target_sequence_col: str,
+    dataset_id: str | None,
+    wt_sequence: str | None,
+    wt_fasta_path: str | Path | None,
+) -> tuple[str, str]:
+    """Resolve ProteinGym indel WT evidence without expanding conflicts by row."""
+    dataset_key = dataset_id or "dataset"
+    fallback = wt_sequence
+    fallback_provenance = "user_fallback"
+    if fallback is None and wt_fasta_path is not None:
+        _, fallback = read_fasta_one(str(wt_fasta_path))
+        fallback_provenance = "fasta_file"
+
+    distinct_source_sequences: dict[str, None] = {}
+    if target_sequence_col in df.columns:
+        for value in df[target_sequence_col]:
+            if pd.isna(value):
+                continue
+            if isinstance(value, str) and value.strip():
+                distinct_source_sequences[value.strip().upper()] = None
+            elif not isinstance(value, str):
+                raise InvalidDatasetError(
+                    "WT sequence from proteingym_target_seq must be a "
+                    "non-empty protein sequence."
+                )
+
+    validated_source_sequences: list[str] = []
+    for value in distinct_source_sequences:
+        sequence, _ = resolve_wt_sequence(
+            (("proteingym_target_seq", value),),
+            None,
+            dataset_id=dataset_key,
+        )
+        validated_source_sequences.append(sequence)
+
+    if len(validated_source_sequences) > 1:
+        raise WildTypeConflictError(
+            f"Conflicting WT sequences for {dataset_key!r} from "
+            "proteingym_target_seq."
+        )
+
+    evidence = (
+        (("proteingym_target_seq", validated_source_sequences[0]),)
+        if validated_source_sequences
+        else ()
+    )
+    sequence, provenance = resolve_wt_sequence(
+        evidence,
+        fallback,
+        dataset_id=dataset_key,
+    )
+    if not evidence and fallback_provenance == "fasta_file":
+        provenance = fallback_provenance
+    return sequence, provenance
+
+
 def _maybe_add_wildtype_row(
     df: pd.DataFrame,
     *,
@@ -170,6 +264,7 @@ def _maybe_add_wildtype_row(
     protein_id: str | None,
     gene: str | None,
     uniprot_id: str | None,
+    variant: str | None = "",
 ) -> pd.DataFrame:
     """Prepend a scoreless synthetic WT row when one was requested and is absent."""
     if not add_wildtype_row:
@@ -186,7 +281,7 @@ def _maybe_add_wildtype_row(
         "gene": gene,
         "uniprot_id": uniprot_id,
         "wt_sequence": wt_sequence,
-        "variant": "",
+        "variant": variant,
         "mutated_sequence": wt_sequence,
         "is_wildtype": True,
         "is_synthetic": True,
@@ -276,6 +371,7 @@ def _finalize_dataset(
     require_wt_for_transforms: bool,
     wt_score: float | None,
     wt_sequence_provenance: str,
+    authoritative_sequence_mode: bool = False,
 ) -> pd.DataFrame:
     """Apply the common post-parse dataset construction stages."""
     out = df.copy()
@@ -369,6 +465,7 @@ def _finalize_dataset(
         protein_id=protein_id,
         gene=gene,
         uniprot_id=uniprot_id,
+        variant=None if authoritative_sequence_mode else "",
     )
 
     if validate_output:
@@ -380,14 +477,16 @@ def _finalize_dataset(
             variant_col="variant",
             wt_col="is_wildtype",
             n_mutations_col="n_mutations",
+            authoritative_sequence_mode=authoritative_sequence_mode,
         )
-        validate_consistent_sequence_lengths(
-            out,
-            wt_sequence_col="wt_sequence",
-            mutated_sequence_col="mutated_sequence",
-            only_status_ok=True,
-            status_col="status",
-        )
+        if not authoritative_sequence_mode:
+            validate_consistent_sequence_lengths(
+                out,
+                wt_sequence_col="wt_sequence",
+                mutated_sequence_col="mutated_sequence",
+                only_status_ok=True,
+                status_col="status",
+            )
 
     synthetic_inserted = bool(
         (out["is_wildtype"].eq(True) & out["is_synthetic"].eq(True)).any()
@@ -613,4 +712,87 @@ def build_proteingym_dataset(
         require_wt_for_transforms=require_wt_for_transforms,
         wt_score=wt_score,
         wt_sequence_provenance=wt_sequence_provenance,
+    )
+
+
+def build_proteingym_indel_dataset(
+    input_path: str | Path,
+    score_col: str,
+    mutated_sequence_col: str = "mutated_sequence",
+    target_sequence_col: str = "target_seq",
+    dataset_id: str | None = None,
+    protein_id: str | None = None,
+    gene: str | None = None,
+    uniprot_id: str | None = None,
+    wt_sequence: str | None = None,
+    wt_fasta_path: str | Path | None = None,
+    sep: str | None = None,
+    add_relative_score: bool = False,
+    relative_method: str = "log_ratio",
+    relative_output_col: str = "score_log_ratio",
+    add_binary_label: bool = False,
+    delta: float = 0.1,
+    higher_is_better: bool = True,
+    binary_output_col: str = "score_binary_like",
+    add_wildtype_row: bool = False,
+    drop_failed: bool = False,
+    validate_output: bool = True,
+    require_wt_for_transforms: bool = False,
+    wt_score: float | None = None,
+) -> pd.DataFrame:
+    """Standardize source-authoritative ProteinGym DMS indel sequences."""
+    _validate_builder_standardization_options(
+        wt_score=wt_score,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+    )
+    logger.info(
+        "Starting authoritative sequence build source=proteingym dataset_id=%s",
+        dataset_id,
+    )
+    df = read_table(input_path, sep=sep)
+    validate_required_columns(df, [mutated_sequence_col, score_col])
+    validate_score_column(df, score_col, allow_na=True)
+
+    wt_seq, wt_sequence_provenance = _resolve_proteingym_indel_wt(
+        df,
+        target_sequence_col=target_sequence_col,
+        dataset_id=dataset_id,
+        wt_sequence=wt_sequence,
+        wt_fasta_path=wt_fasta_path,
+    )
+    parsed = df[mutated_sequence_col].apply(
+        lambda value: _safe_authoritative_sequence(wt_seq, value)
+    )
+    parsed_df = pd.DataFrame(parsed.tolist(), index=df.index)
+
+    return _finalize_dataset(
+        df,
+        parsed_df,
+        source="proteingym",
+        score_col=score_col,
+        wt_sequence=wt_seq,
+        dataset_id=dataset_id,
+        protein_id=protein_id,
+        gene=gene,
+        uniprot_id=uniprot_id,
+        add_relative_score=add_relative_score,
+        relative_method=relative_method,
+        relative_output_col=relative_output_col,
+        add_binary_label=add_binary_label,
+        delta=delta,
+        higher_is_better=higher_is_better,
+        binary_output_col=binary_output_col,
+        add_wildtype_row=add_wildtype_row,
+        drop_failed=drop_failed,
+        validate_output=validate_output,
+        require_wt_for_transforms=require_wt_for_transforms,
+        wt_score=wt_score,
+        wt_sequence_provenance=wt_sequence_provenance,
+        authoritative_sequence_mode=True,
     )

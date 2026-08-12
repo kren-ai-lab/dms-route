@@ -262,20 +262,51 @@ def validate_standard_dataset(
     variant_col: str = "variant",
     wt_col: str = "is_wildtype",
     n_mutations_col: str = "n_mutations",
+    authoritative_sequence_mode: bool = False,
 ) -> None:
     """Run a compact validation suite over a standardized DMS dataset."""
     validate_required_columns(df, [score_col, variant_col, wt_col, n_mutations_col])
     validate_score_column(df, score_col, allow_na=True)
-    validate_variant_column(df, variant_col)
+    if authoritative_sequence_mode:
+        validate_required_columns(
+            df,
+            [
+                "dataset_id",
+                "source",
+                "protein_id",
+                "gene",
+                "uniprot_id",
+                "wt_sequence",
+                "mutated_sequence",
+                "is_synthetic",
+                "status",
+                "error",
+            ],
+        )
+    else:
+        validate_variant_column(df, variant_col)
     validate_n_mutations_column(df, n_mutations_col, allow_na=True)
 
-    if require_status:
+    if require_status or authoritative_sequence_mode:
         validate_status_column(df, status_col="status")
 
     if "wt_sequence" in df.columns:
         non_null_wt = df["wt_sequence"].dropna()
         if not non_null_wt.empty:
             validate_wt_sequence(non_null_wt.iloc[0])
+
+    if authoritative_sequence_mode:
+        ok_rows = df[df["status"] == "OK"]
+        validate_sequence_column(
+            ok_rows,
+            "wt_sequence",
+            allow_na=False,
+        )
+        validate_sequence_column(
+            ok_rows,
+            "mutated_sequence",
+            allow_na=False,
+        )
 
     if require_wt:
         validate_wt_presence(
