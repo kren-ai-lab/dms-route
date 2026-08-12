@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 import dms_parser.fetch as fetch_module
 import dms_parser.pipeline as pipeline_module
@@ -20,6 +21,7 @@ def _forbid_skipped_operations(monkeypatch) -> None:
 
     monkeypatch.setattr(pipeline_module, "build_mavedb_dataset", forbidden)
     monkeypatch.setattr(pipeline_module, "build_proteingym_dataset", forbidden)
+    monkeypatch.setattr(pipeline_module, "build_proteingym_indel_dataset", forbidden)
     monkeypatch.setattr(pipeline_module, "write_table", forbidden)
     monkeypatch.setattr(fetch_module, "fetch_to_cache", forbidden)
     monkeypatch.setattr(mavedb_module, "download_mavedb_dataset", forbidden)
@@ -109,14 +111,20 @@ def test_mavedb_metadata_only_skips_dataset_acquisition(
     assert not source_root.exists()
 
 
+@pytest.mark.parametrize(
+    "resource_id",
+    ["dms_substitutions", "dms_indels"],
+)
 def test_proteingym_metadata_only_skips_benchmark_and_processing(
+    resource_id,
     tmp_path,
     monkeypatch,
 ):
     _forbid_skipped_operations(monkeypatch)
     source_root = tmp_path / "proteingym"
     source_root.mkdir()
-    metadata_path = source_root / "DMS_substitutions.csv"
+    resource = get_proteingym_resource(resource_id)
+    metadata_path = source_root / resource.metadata_filename
     pd.DataFrame(
         {
             "DMS_filename": ["experiment.csv"],
@@ -125,7 +133,6 @@ def test_proteingym_metadata_only_skips_benchmark_and_processing(
             "UniProt_ID": ["P12345"],
         }
     ).to_csv(metadata_path, index=False)
-    resource = get_proteingym_resource("dms_substitutions")
     requested_urls: list[str] = []
 
     def metadata_download(url, output_path, *, overwrite=False):
@@ -140,7 +147,7 @@ def test_proteingym_metadata_only_skips_benchmark_and_processing(
 
     result = pipeline_module.process_proteingym(
         {
-            "resource": "dms_substitutions",
+            "resource": resource_id,
             "dir_base": source_root,
             "datasets": [{"dataset_id": "experiment-1"}],
         },
@@ -164,7 +171,7 @@ def test_proteingym_metadata_only_skips_benchmark_and_processing(
         }
     ]
     assert metadata_path.exists()
-    assert not (source_root / "DMS_substitutions.parquet").exists()
+    assert not (source_root / resource.data_filename).exists()
     _assert_no_data_artifacts(source_root)
 
 

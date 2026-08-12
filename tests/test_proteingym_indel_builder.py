@@ -52,7 +52,7 @@ def test_proteingym_indel_builder_is_public_with_expected_signature():
         "require_wt_for_transforms",
         "wt_score",
     }.issubset(parameters)
-    assert get_proteingym_resource("dms_indels").processing_supported is False
+    assert get_proteingym_resource("dms_indels").processing_supported is True
 
 
 def test_proteingym_indel_builder_uses_authoritative_sequences(tmp_path):

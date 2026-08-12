@@ -156,7 +156,7 @@ def test_loading_applies_source_validation(
     ("resource_id", "error_type"),
     [
         ("not_registered", UnknownSourceResourceError),
-        ("dms_indels", UnsupportedSourceResourceError),
+        ("clinical_indels", UnsupportedSourceResourceError),
     ],
 )
 def test_validation_preserves_distinct_resource_errors(

@@ -113,7 +113,7 @@ EXPECTED_RESOURCES = {
         ),
         "metadata_filename": "DMS_indels.csv",
         "data_filename": "DMS_indels.parquet",
-        "processing_supported": False,
+        "processing_supported": True,
     },
     "clinical_substitutions": {
         "collection": "clinical",
@@ -164,7 +164,7 @@ def test_registry_contains_exact_official_resources() -> None:
         resource.resource_id
         for resource in resources
         if resource.processing_supported
-    ] == ["dms_substitutions"]
+    ] == ["dms_substitutions", "dms_indels"]
 
 
 def test_source_and_catalog_defaults_resolve_registry() -> None:
@@ -205,8 +205,21 @@ def test_python_endpoint_overrides_remain_available() -> None:
 def test_unknown_and_unsupported_resources_are_distinct() -> None:
     with pytest.raises(UnknownSourceResourceError, match="Unknown"):
         get_proteingym_resource("not_registered")
+    assert get_proteingym_resource(
+        "dms_indels",
+        require_processing=True,
+    ).resource_id == "dms_indels"
+
+
+@pytest.mark.parametrize(
+    "resource_id",
+    ["clinical_substitutions", "clinical_indels"],
+)
+def test_clinical_resources_remain_unsupported_for_processing(
+    resource_id: str,
+) -> None:
     with pytest.raises(UnsupportedSourceResourceError, match="not currently supported"):
-        get_proteingym_resource("dms_indels", require_processing=True)
+        get_proteingym_resource(resource_id, require_processing=True)
 
 
 def test_unsupported_resource_fails_before_io(
@@ -222,7 +235,7 @@ def test_unsupported_resource_fails_before_io(
     with pytest.raises(UnsupportedSourceResourceError):
         pipeline_module.process_proteingym(
             {
-                "resource": "dms_indels",
+                "resource": "clinical_indels",
                 "dir_base": source_root,
                 "datasets": [{"dataset_id": "ASSAY_1"}],
             }

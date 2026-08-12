@@ -27,7 +27,11 @@ from dms_parser._wildtype import (
     replace_wt_sequence_provenance,
     resolve_wt_sequence,
 )
-from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
+from dms_parser.builders import (
+    build_mavedb_dataset,
+    build_proteingym_dataset,
+    build_proteingym_indel_dataset,
+)
 from dms_parser.config import validate_pipeline_config
 from dms_parser.downloads import (
     DatasetBatchDownloadEntry,
@@ -243,7 +247,16 @@ def process_proteingym(
                 entry.get("build_kwargs", {}),
             )
             build_kwargs.setdefault("score_col", "DMS_score")
-            build_kwargs.setdefault("variant_col", "mutant")
+            if resource.variant_type == "substitutions":
+                build_kwargs.setdefault("variant_col", "mutant")
+            else:
+                build_kwargs.pop("variant_col", None)
+                build_kwargs.pop("strict_variant_parsing", None)
+                build_kwargs.setdefault(
+                    "mutated_sequence_col",
+                    "mutated_sequence",
+                )
+                build_kwargs.setdefault("target_sequence_col", "target_seq")
             build_kwargs.setdefault("add_relative_score", False)
             build_kwargs.setdefault("add_binary_label", False)
             build_kwargs.setdefault("add_wildtype_row", False)
@@ -255,17 +268,26 @@ def process_proteingym(
             build_kwargs["gene"] = gene
             build_kwargs["uniprot_id"] = uniprot_id
             logger.debug(
-                "[proteingym] Detected columns dataset_id=%s variant_col=%s "
+                "[proteingym] Detected columns dataset_id=%s variant_type=%s "
                 "score_col=%s",
-                resolved_dataset_id, build_kwargs["variant_col"], build_kwargs["score_col"],
+                resolved_dataset_id,
+                resource.variant_type,
+                build_kwargs["score_col"],
             )
 
             write_table(experiment_table, raw_path, index=False)
-            built_table = build_proteingym_dataset(
-                input_path=raw_path,
-                wt_sequence=wt_sequence,
-                **build_kwargs,
-            )
+            if resource.variant_type == "substitutions":
+                built_table = build_proteingym_dataset(
+                    input_path=raw_path,
+                    wt_sequence=wt_sequence,
+                    **build_kwargs,
+                )
+            else:
+                built_table = build_proteingym_indel_dataset(
+                    input_path=raw_path,
+                    wt_sequence=wt_sequence,
+                    **build_kwargs,
+                )
             replace_wt_sequence_provenance(
                 built_table,
                 wt_sequence_provenance,

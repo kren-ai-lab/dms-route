@@ -59,7 +59,7 @@ _RESOURCE_LIST = (
         ),
         metadata_filename="DMS_indels.csv",
         data_filename="DMS_indels.parquet",
-        processing_supported=False,
+        processing_supported=True,
     ),
     ProteinGymResource(
         resource_id="clinical_substitutions",
