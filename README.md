@@ -42,7 +42,8 @@ It is intentionally:
 * ❌ not tied to specific benchmarks
 * ❌ not dependent on deep learning frameworks
 
-It is a **clean data + representation layer**.
+It provides **standardized mutation tables and traceability metadata ready for
+downstream representation and modeling**.
 
 ---
 
@@ -148,6 +149,11 @@ options. Query semantics differ between the two sources, and `--variant-type`
 applies only to ProteinGym. Use `--format json` for machine-readable output.
 `--output` writes UTF-8 data and overwrites its target.
 
+For MaveDB, `list` queries the active API and delegates `--query` to its general
+text search. Results therefore reflect the current database state, API
+pagination (`--offset`), and the configured `--limit` (100 by default). This is
+different from the fixed-snapshot metadata search performed by `discover`.
+
 ### Inspect the local cache
 
 Use the read-only cache inventory to inspect managed artifacts without
@@ -221,6 +227,21 @@ An uncached managed snapshot may download an approximately 1.9 GB archive.
 Managed discovery uses the snapshot cache described above; `--cache-dir`
 changes its root and `--refresh` reacquires the selected snapshot. These two
 options are intentionally unavailable with `--main-json`.
+
+Local matching is case-insensitive. It uses substring matching for target gene
+names (`name`, `mappedHgncName`, and `targetAccession.gene`) and exact matching
+for identifiers (`targetAccession.accession`,
+`uniprotIdFromMappedMetadata`, and external identifier values). By default,
+score sets absent from an experiment's current `scoreSetUrns` list are treated
+as superseded and excluded. Consequently, searches such as `HSP82` and `HSP90`
+can overlap or even return the same score sets when a target's names or aliases
+contain both terms.
+
+`list` and `discover` are not expected to return identical results for
+arbitrary text queries: the former reflects the live API, while the latter
+reflects the selected snapshot version and the local matching rules above. A
+specific score-set URN present in both sources can be compared directly, but
+the surrounding result sets remain source- and version-dependent.
 
 Text output groups only matching score sets under their experiments and exposes
 the score-set URNs needed by other commands:
@@ -464,9 +485,13 @@ preserves unrelated files in the output directory.
 Regression scores are the primary standardized output. `score_raw` always
 retains the source-derived numeric values, while WT-relative scores and binary
 labels remain opt-in. A WT sequence is required to reconstruct variants, but it
-does not imply that a reliable WT score exists. The score is taken from an
-unambiguous observed WT row when available; no value of zero or one is assumed.
-Supply explicit fallbacks only when automatic evidence is absent:
+does not imply that a reliable WT score exists. `--wt-score` does not search for
+or select mutations; it supplies an explicit fallback reference only for a
+requested WT-relative score calculation. A valid numeric score from an
+observed WT row takes priority, and the fallback is used only when the dataset
+does not provide a usable observed WT score. DMS Parser never assumes that WT
+equals zero or one. Normal downloads without `--add-relative-score` do not
+require `--wt-score`:
 
 ```bash
 dms-parser download \
@@ -540,8 +565,9 @@ dms-parser download-many \
 ```
 
 The cached snapshot and its selected tables are shared across the batch while
-each standardized bundle is built and published independently. Superseded
-score sets require `--include-superseded`.
+each requested score-set URN is standardized and published independently;
+`download-many` does not merge score sets. Superseded score sets require
+`--include-superseded`.
 
 WT fallbacks for `download-many` are always dataset-specific. Repeat mappings
 in `DATASET_ID=VALUE` form; one scalar is never shared across the batch:

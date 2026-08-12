@@ -153,6 +153,40 @@ def test_help_exits_successfully() -> None:
         assert "--no-" not in output, arguments
 
 
+def _normalized_help(*arguments: str) -> str:
+    """Return one help page with terminal wrapping normalized."""
+    result = RUNNER.invoke(cli_module.app, [*arguments, "--help"])
+
+    assert result.exit_code == 0
+    assert result.stderr == ""
+    without_borders = re.sub(r"[\u2500-\u257f]", " ", result.stdout)
+    return re.sub(r"\s+", " ", without_borders)
+
+
+def test_mavedb_list_and_snapshot_discover_help_distinguish_searches() -> None:
+    list_help = _normalized_help("list")
+    discover_help = _normalized_help("discover")
+
+    assert "active API, not a fixed snapshot" in list_help
+    assert "delegate a general text search" in list_help
+    assert "API pagination and configured/default limits" in list_help
+    assert "fixed local MaveDB snapshot, not the active API" in discover_help
+    assert "target names by case-insensitive substring" in discover_help
+    assert "target identifiers exactly" in discover_help
+    assert "superseded score sets are excluded by default" in discover_help
+
+
+@pytest.mark.parametrize("command", ["download", "download-many"])
+def test_wt_score_help_describes_relative_score_fallback(command: str) -> None:
+    output = _normalized_help(command)
+
+    assert "fallback reference for --add-relative-score" in output
+    assert "never searches for or selects mutations" in output
+    assert "valid observed WT row takes priority" in output
+    assert "no WT value of 0 or 1 is assumed" in output
+    assert "without relative-score calculation do not need it" in output
+
+
 @pytest.mark.parametrize(
     "arguments",
     [

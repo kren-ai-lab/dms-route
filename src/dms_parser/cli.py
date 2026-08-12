@@ -437,14 +437,25 @@ def _cache_command(
 
 @app.command(
     "list",
-    help="List datasets from a source catalog.",
+    help=(
+        "List datasets from a source catalog. MaveDB uses its active API, not "
+        "a fixed snapshot."
+    ),
     context_settings=_HELP_CONTEXT,
 )
 def _list_command(
     source: Annotated[_CatalogSource, typer.Option("--source")],
     query: Annotated[
         str | None,
-        typer.Option("--query", "-q", metavar="QUERY"),
+        typer.Option(
+            "--query",
+            "-q",
+            metavar="QUERY",
+            help=(
+                "For MaveDB, delegate a general text search to the active API; "
+                "results follow API pagination and configured/default limits."
+            ),
+        ),
     ] = None,
     limit: Annotated[
         int | None,
@@ -658,7 +669,12 @@ def _download_command(
         typer.Option(
             "--wt-score",
             metavar="SCORE",
-            help="Fallback WT score used only when reliable automatic evidence is absent.",
+            help=(
+                "Explicit fallback reference for --add-relative-score; it never "
+                "searches for or selects mutations. A valid observed WT row takes "
+                "priority, and no WT value of 0 or 1 is assumed. Downloads without "
+                "relative-score calculation do not need it."
+            ),
         ),
     ] = None,
     add_relative_score: Annotated[
@@ -829,7 +845,13 @@ def _download_many_command(
         typer.Option(
             "--wt-score",
             metavar="DATASET_ID=SCORE",
-            help="Repeatable per-dataset fallback WT score.",
+            help=(
+                "Repeatable per-dataset fallback reference for "
+                "--add-relative-score; it never searches for or selects mutations. "
+                "A valid observed WT row takes priority, and no WT value of 0 or 1 "
+                "is assumed. Batches without relative-score calculation do not "
+                "need it."
+            ),
         ),
     ] = None,
     add_relative_score: Annotated[
@@ -1131,7 +1153,10 @@ def _snapshot_extract_command(
 
 @app.command(
     "discover",
-    help="Search score sets in a local MaveDB bulk catalog.",
+    help=(
+        "Search score-set metadata in one fixed local MaveDB snapshot, not the "
+        "active API."
+    ),
     context_settings=_HELP_CONTEXT,
 )
 def _discover_command(
@@ -1142,6 +1167,11 @@ def _discover_command(
             "-q",
             parser=_non_empty_query,
             metavar="QUERY",
+            help=(
+                "Match target names by case-insensitive substring and target "
+                "identifiers exactly; superseded score sets are excluded by "
+                "default."
+            ),
         ),
     ],
     main_json: Annotated[
