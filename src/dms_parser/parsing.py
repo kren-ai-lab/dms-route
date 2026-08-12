@@ -280,13 +280,8 @@ def extract_mutation_tokens(variant: Any) -> list[str]:
 
 
 def hgvs_pro_is_indel(hgvs_pro: str) -> bool:
-    """Return whether HGVS contains an indel outside the bounded support."""
+    """Return whether HGVS suggests an indel or related syntax."""
     value = str(hgvs_pro).strip()
-    if (
-        _HGVS_SINGLE_DELETION_RE.fullmatch(value)
-        or _HGVS_SINGLE_INSERTION_RE.fullmatch(value)
-    ):
-        return False
     return any(token in value for token in INDEL_TOKENS_PRO)
 
 
@@ -554,13 +549,10 @@ def parse_mavedb_hgvs_series(
         }
 
         try:
-            if hgvs_pro_is_indel(hgvs_pro):
-                out["status"] = "Unsupported"
-                out["error"] = (
-                    "Protein-level indel/frameshift not supported in substitutions-only analysis."
-                )
-            else:
-                out["mutations"] = parse_hgvs_pro(hgvs_pro)
+            out["mutations"] = parse_hgvs_pro(hgvs_pro)
+        except UnsupportedVariantError as exc:
+            out["status"] = "Unsupported"
+            out["error"] = str(exc)
         except Exception as exc:
             if strict:
                 raise

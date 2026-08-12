@@ -14,11 +14,14 @@ from dms_parser._wildtype import (
     set_wt_resolution,
     validate_standardization_options,
 )
-from dms_parser.exceptions import InvalidDatasetError, MissingWildTypeError
+from dms_parser.exceptions import (
+    InvalidDatasetError,
+    MissingWildTypeError,
+    UnsupportedVariantError,
+)
 from dms_parser.io import read_table
 from dms_parser.parsing import (
     count_mutations,
-    hgvs_pro_is_indel,
     hgvs_to_sequence,
     is_wildtype_variant,
     parse_variant_series,
@@ -105,13 +108,6 @@ def _safe_hgvs_to_sequence(
     }
 
     try:
-        if hgvs_pro_is_indel(hgvs_pro):
-            out["status"] = "Unsupported"
-            out["error"] = (
-                "Complex protein indel/frameshift not supported."
-            )
-            return out
-
         mutated_sequence, variant = hgvs_to_sequence(wt_sequence, hgvs_pro)
 
         out["variant"] = variant
@@ -119,6 +115,9 @@ def _safe_hgvs_to_sequence(
         out["is_wildtype"] = is_wildtype_variant(variant)
         out["n_mutations"] = count_mutations(variant)
 
+    except UnsupportedVariantError as exc:
+        out["status"] = "Unsupported"
+        out["error"] = str(exc)
     except Exception as exc:
         out["status"] = "Error"
         out["error"] = str(exc)

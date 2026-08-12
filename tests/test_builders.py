@@ -718,8 +718,13 @@ def test_build_mavedb_dataset_basic(tmp_path, mavedb_like_df: pd.DataFrame, wt_s
 def test_build_mavedb_dataset_with_unsupported_variant(tmp_path, wt_sequence: str):
     df = pd.DataFrame(
         {
-            "hgvs_pro": ["p.Met1Ala", "p.[Gly10del]", "p.[=;Gly10del]"],
-            "score": [0.8, 0.2, 0.1],
+            "hgvs_pro": [
+                "p.Met1Ala",
+                "p.[Gly10del]",
+                "p.[=;Gly10del]",
+                "p.Ala1del",
+            ],
+            "score": [0.8, 0.2, 0.1, -0.3],
         }
     )
     path = tmp_path / "mavedb.csv"
@@ -733,7 +738,12 @@ def test_build_mavedb_dataset_with_unsupported_variant(tmp_path, wt_sequence: st
         add_relative_score=False,
     )
 
-    assert list(result["status"]) == ["OK", "Unsupported", "Unsupported"]
+    assert list(result["status"]) == [
+        "OK",
+        "Unsupported",
+        "Unsupported",
+        "Error",
+    ]
 
 
 def test_build_mavedb_dataset_supports_bounded_indels_and_transforms(tmp_path):

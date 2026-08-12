@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+import dms_parser
 from dms_parser.exceptions import (
     InvalidHGVSVariantError,
     InvalidVariantError,
@@ -135,11 +136,16 @@ def test_extract_mutation_tokens():
 
 
 def test_hgvs_pro_is_indel():
-    assert hgvs_pro_is_indel("p.Cys2del") is False
-    assert hgvs_pro_is_indel("p.Asp1_Ala2insLys") is False
+    assert hgvs_pro_is_indel("p.Cys2del") is True
+    assert hgvs_pro_is_indel("p.Asp1_Ala2insLys") is True
     assert hgvs_pro_is_indel("p.Cys2_Asp3del") is True
     assert hgvs_pro_is_indel("p.[Cys2del]") is True
     assert hgvs_pro_is_indel("p.Met1Ala") is False
+
+
+def test_hgvs_pro_is_indel_package_public_import():
+    assert dms_parser.hgvs_pro_is_indel is hgvs_pro_is_indel
+    assert dms_parser.hgvs_pro_is_indel("p.Cys2del") is True
 
 
 def test_parse_hgvs_pro_single():
@@ -353,10 +359,30 @@ def test_hgvs_to_sequence_ignores_bracketed_equality_components(
 
 
 def test_parse_mavedb_hgvs_series():
-    series = pd.Series(["p.Met1Ala", "p.[Gly10del]", "p.invalid"])
+    series = pd.Series(
+        [
+            "p.Cys2del",
+            "p.Asp1_Ala2insLys",
+            "p.[Gly10del]",
+            "p.invalid",
+        ]
+    )
     result = parse_mavedb_hgvs_series(series, strict=False)
 
-    assert list(result["status"]) == ["OK", "Unsupported", "Error"]
+    assert list(result["status"]) == ["OK", "OK", "Unsupported", "Error"]
+    assert isinstance(result.loc[0, "mutations"][0], ProteinDeletionEdit)
+    assert isinstance(result.loc[1, "mutations"][0], ProteinInsertionEdit)
+
+
+def test_parse_mavedb_hgvs_series_strict_only_raises_parsing_errors():
+    unsupported = parse_mavedb_hgvs_series(
+        pd.Series(["p.[Cys2del]"]),
+        strict=True,
+    )
+
+    assert unsupported.loc[0, "status"] == "Unsupported"
+    with pytest.raises(InvalidHGVSVariantError):
+        parse_mavedb_hgvs_series(pd.Series(["p.invalid"]), strict=True)
 
 
 def test_translate_dna_basic():
