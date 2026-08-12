@@ -1,99 +1,16 @@
-# 📦 **dms-parser**
+# dms-parser
 
-> A lightweight and modular Python library for downloading, parsing, standardizing, and transforming Deep Mutational Scanning (DMS) datasets from ProteinGym and MaveDB.
+`dms-parser` is a Python package and command-line interface for obtaining and
+standardizing published Deep Mutational Scanning (DMS) datasets from
+ProteinGym and MaveDB.
 
-`dms-parser` works with already-published DMS datasets; it does not run DMS
-experiments or train predictive models.
+The package parses substitution variants, reconstructs protein sequences, keeps
+source scores in a common `score_raw` column, and records row-level parsing
+outcomes. Score transformations and pseudo-binary labels are optional.
 
----
+## Installation
 
-## 🧠 Motivation
-
-Deep Mutational Scanning (DMS) experiments generate large-scale measurements of variant effects across protein sequences. However, working with DMS data in practice presents several challenges:
-
-* **Heterogeneous formats** (ProteinGym vs MaveDB vs custom datasets)
-* **Inconsistent mutation encodings** (internal vs HGVS notation)
-* **Missing or implicit wild-type references**
-* **Non-standard score definitions**
-* **Lack of reproducible preprocessing pipelines**
-
-This library addresses these issues by providing a **unified, minimal, and extensible framework** for:
-
-* Parsing mutation representations
-* Reconstructing mutated protein sequences
-* Standardizing datasets into a common schema
-* Transforming scores relative to wild-type
-* Generating ML-ready datasets
-
----
-
-## 🎯 Scope
-
-`dms-parser` is designed to:
-
-* Support **substitution-based DMS datasets**
-* Provide **robust parsing and validation**
-* Enable **WT-relative transformations**
-* Serve as a **data layer for downstream ML pipelines**
-
-It is intentionally:
-
-* ❌ not a modeling library
-* ❌ not tied to specific benchmarks
-* ❌ not dependent on deep learning frameworks
-
-It provides **standardized mutation tables and traceability metadata ready for
-downstream representation and modeling**.
-
----
-
-## 🧩 Core Features
-
-### ✅ Dataset ingestion
-
-* ProteinGym substitution assays (CSV / parquet)
-* MaveDB (API-based or explicitly prefetched bulk-snapshot acquisition)
-
-### ✅ Variant parsing
-
-* Internal notation: `A23V`, `M1A;K2R`
-* HGVS protein notation: `p.Met1Ala`, `p.[Met1Ala;Lys2Arg]`
-* MaveDB complete-target identity: `p.=`
-
-### ✅ Sequence reconstruction
-
-* Apply mutations to WT sequence
-* Support single and multi-mutants
-* Strict validation (position, residue consistency)
-
-### ✅ Dataset standardization
-
-* Unified schema across sources
-* Consistent column naming
-* Explicit mutation metadata
-
-### ✅ Score transformations
-
-* WT-relative ratio / log-ratio / log2-ratio / difference
-* Z-score normalization
-* Min-max scaling
-
-### ✅ Pseudo-label generation
-
-* Threshold-based classification with neutral region
-* Configurable delta
-* Supports both directions (higher/lower is better)
-
-### ✅ Validation
-
-* Sequence validation
-* WT presence checks
-* Dataset integrity checks
-* Error tracking (`status`, `error`)
-
----
-
-## 📦 Installation
+`dms-parser` requires Python 3.10 or newer.
 
 ```bash
 git clone https://github.com/kren-ai-lab/parsing_dms_data.git
@@ -101,38 +18,93 @@ cd parsing_dms_data
 python -m pip install -e .
 ```
 
-The normal installation includes YAML configuration and ProteinGym Parquet
-support.
-
-Inspect the installed interface:
+Confirm that the CLI is available:
 
 ```bash
 dms-parser --help
-dms-parser run --help
-dms-parser cache --help
-dms-parser list --help
-dms-parser metadata --help
-dms-parser download --help
-dms-parser download-many --help
-dms-parser snapshot --help
-dms-parser snapshot fetch --help
-dms-parser snapshot extract --help
-dms-parser discover --help
 ```
 
-The CLI logs at `INFO` by default; pass `--log-level DEBUG` for diagnostic
-output.
+For development, install the test dependency as well:
 
-Use `list` to discover dataset identifiers and `metadata` to inspect one
-normalized `DatasetRecord`:
+```bash
+python -m pip install -e ".[dev]"
+```
+
+## Quick start
+
+Inspect a MaveDB score set and produce a standardized dataset:
+
+```bash
+dms-parser metadata \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000001-a-4
+
+dms-parser download \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000001-a-4 \
+    --output-dir datasets/ube2i
+```
+
+A successful single download writes:
+
+```text
+datasets/ube2i/
+|-- standardized.csv
+|-- summary.csv
+`-- summary.json
+```
+
+The equivalent ProteinGym workflow uses its canonical `DMS_id`:
+
+```bash
+dms-parser download \
+    --source proteingym \
+    --dataset-id BLAT_ECOLX_Jacquier_2013 \
+    --output-dir datasets/blat-jacquier
+```
+
+ProteinGym obtains an assay from its shared substitutions resources. MaveDB
+downloads one score set from the public API unless snapshot acquisition is
+selected explicitly.
+
+## Supported data
+
+| Source | Dataset identifier | Standardized acquisition |
+| --- | --- | --- |
+| ProteinGym | Canonical `DMS_id` | Shared substitutions metadata and data resources |
+| MaveDB | Permanent score-set URN | Public score-set API or a prefetched bulk snapshot |
+
+The standardization workflow supports amino-acid substitutions, including
+multi-mutants. ProteinGym-style variants such as `A23V` and `A23V;G45D` and
+MaveDB protein HGVS variants such as `p.Met1Ala` and
+`p.[Met1Ala;Lys2Arg]` are supported. MaveDB complete-target identity (`p.=`)
+is treated as wild type.
+
+Insertions, deletions, duplications, frameshifts, extensions, and other
+non-substitution variants are not standardized.
+
+## Command-line workflows
+
+### Find datasets
+
+Use `list` to query a source catalog:
 
 ```bash
 dms-parser list --source proteingym --query BRCA1 --limit 10
+dms-parser list --source mavedb --query BRCA1 --limit 10
+```
 
+Use `metadata` when the dataset identifier is already known:
+
+```bash
 dms-parser metadata \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000097-a-1
+    --source proteingym \
+    --dataset-id BRCA1_HUMAN_Findlay_2018
+```
 
+Both commands support text output and JSON output:
+
+```bash
 dms-parser list \
     --source proteingym \
     --variant-type substitutions \
@@ -140,408 +112,31 @@ dms-parser list \
     --output proteingym-catalog.json
 ```
 
-These commands do not download score tables or run the processing pipeline.
-ProteinGym may download and cache lightweight reference CSV files under
-`~/.cache/dms-parser` by default; `--cache-dir` changes that location and
-`--refresh` refreshes those references. MaveDB instead queries its public
-metadata API directly and does not accept the cache, refresh, or variant-type
-options. Query semantics differ between the two sources, and `--variant-type`
-applies only to ProteinGym. Use `--format json` for machine-readable output.
-`--output` writes UTF-8 data and overwrites its target.
+MaveDB catalog commands query the active API. ProteinGym catalog commands use
+reference files stored in the local cache. `--variant-type`, `--cache-dir`, and
+`--refresh` apply only to the ProteinGym catalog.
 
-For MaveDB, `list` queries the active API and delegates `--query` to its general
-text search. Results therefore reflect the current database state, API
-pagination (`--offset`), and the configured `--limit` (100 by default). This is
-different from the fixed-snapshot metadata search performed by `discover`.
+### Download one dataset
 
-### Inspect the local cache
-
-Use the read-only cache inventory to inspect managed artifacts without
-refreshing, repairing, deleting, or otherwise changing them:
-
-```powershell
-dms-parser cache
-dms-parser cache --source proteingym
-dms-parser cache --source mavedb_snapshot --dataset-id urn:mavedb:00000001-a-1
-dms-parser cache --format json
-dms-parser cache --cache-dir .\example-cache
-```
-
-The default cache root is `~/.cache/dms-parser`. A `structurally_complete`
-entry has valid persisted metadata, the expected non-symlink regular payload
-files, and matching declared sizes. Inventory does not recalculate checksums
-and does not prove freshness, scientific validity, or future parseability.
-Invalid and incomplete objects are reported but are never repaired or deleted.
-
-### Managed MaveDB bulk snapshots
-
-MaveDB publishes versioned bulk snapshots under the stable Zenodo concept DOI
-`10.5281/zenodo.11201736`. Resolve the newest concrete version when following
-current releases, or pin a concrete record ID for reproducible work:
-
-```bash
-dms-parser snapshot fetch --latest
-
-dms-parser snapshot fetch \
-    --record 20840937 \
-    --format json
-```
-
-Snapshots are stored under
-`~/.cache/dms-parser/mavedb/snapshots/<record-id>/` by default;
-`--cache-dir` changes the cache root and `--refresh` reacquires the selected
-concrete version. A pinned valid version is reused without contacting Zenodo,
-while `--latest` resolves the current concrete record before checking its
-versioned cache entry.
-
-The bulk archive can be approximately 1.9 GB. Downloads are streamed and
-published only after their exact Zenodo size and checksum are verified. The
-manager safely extracts only the regular `main.json` member from supported
-TAR.GZ or ZIP archives; score tables are not extracted. Neither the archive nor
-`main.json` is stored in this repository.
-
-### Discover datasets in a MaveDB bulk snapshot
-
-`discover` searches a reproducible, already-extracted bulk `main.json`, not the
-live MaveDB API. Use an exact local file without network or snapshot-manager
-access:
-
-```bash
-dms-parser discover \
-    --main-json /data/mavedb/main.json \
-    --query BRCA1
-```
-
-Or let the existing snapshot manager resolve the latest version or a pinned
-Zenodo record:
-
-```bash
-dms-parser discover --snapshot latest --query BRCA1
-
-dms-parser discover \
-    --snapshot 20840937 \
-    --query BRCA1
-```
-
-An uncached managed snapshot may download an approximately 1.9 GB archive.
-Managed discovery uses the snapshot cache described above; `--cache-dir`
-changes its root and `--refresh` reacquires the selected snapshot. These two
-options are intentionally unavailable with `--main-json`.
-
-Local matching is case-insensitive. It uses substring matching for target gene
-names (`name`, `mappedHgncName`, and `targetAccession.gene`) and exact matching
-for identifiers (`targetAccession.accession`,
-`uniprotIdFromMappedMetadata`, and external identifier values). By default,
-score sets absent from an experiment's current `scoreSetUrns` list are treated
-as superseded and excluded. Consequently, searches such as `HSP82` and `HSP90`
-can overlap or even return the same score sets when a target's names or aliases
-contain both terms.
-
-`list` and `discover` are not expected to return identical results for
-arbitrary text queries: the former reflects the live API, while the latter
-reflects the selected snapshot version and the local matching rules above. A
-specific score-set URN present in both sources can be compared directly, but
-the surrounding result sets remain source- and version-dependent.
-
-Text output groups only matching score sets under their experiments and exposes
-the score-set URNs needed by other commands:
-
-```text
-query: BRCA1
-snapshot_title: MaveDB public data dump
-as_of: 2026-06-24T18:13:01Z
-source: managed snapshot
-record_id: 20840937
-experiment_count: 1
-score_set_count: 1
-experiment: urn:mavedb:00000097-a
-  experiment_set: urn:mavedb:00000097
-  title: BRCA1 saturation editing
-  score_set: urn:mavedb:00000097-a-1
-    title: BRCA1 function scores
-    targets: BRCA1
-    n_variants: 3893
-    status: current
-```
-
-Use deterministic JSON on standard output or write it as UTF-8 to a file:
-
-```bash
-dms-parser discover \
-    --snapshot 20840937 \
-    --query BRCA1 \
-    --format json \
-    --output brca1-score-sets.json
-```
-
-The Python API loads, validates, and indexes the complete file once. Reuse one
-catalog for repeated searches without reopening or reparsing `main.json`:
-
-```python
-from dms_parser import MaveDBBulkCatalog
-
-catalog = MaveDBBulkCatalog.from_file("/data/mavedb/main.json")
-brca1 = catalog.search_by_gene("BRCA1")
-tp53 = catalog.search_by_gene("TP53")
-
-for experiment in brca1.experiments:
-    for score_set in experiment.score_sets:
-        print(score_set.dataset_id)
-```
-
-Score sets listed by an experiment's `scoreSetUrns` are current. Older nested
-score sets absent from that list are superseded, excluded by default, and
-marked explicitly when requested:
-
-```bash
-dms-parser discover \
-    --main-json /data/mavedb/main.json \
-    --query BRCA1 \
-    --include-superseded
-```
-
-Discovery only searches metadata. It does not download score tables, choose or
-merge alternatives, or make compatibility decisions. Pass a returned URN
-manually to the existing single- or multi-dataset download interface when
-appropriate:
+`download` obtains and standardizes one dataset without a YAML configuration:
 
 ```bash
 dms-parser download \
     --source mavedb \
-    --dataset-id urn:mavedb:00000097-a-1 \
-    --output-dir datasets/mavedb-00000097-a-1
+    --dataset-id urn:mavedb:00000001-a-4 \
+    --output-dir datasets/ube2i
 ```
 
-### Extract raw tables from a managed MaveDB snapshot
+Source data are cached under `~/.cache/dms-parser` by default. Use
+`--cache-dir` to select another cache root, `--refresh` to reacquire source
+artifacts, and `--overwrite` to replace an existing three-file output bundle.
 
-`snapshot extract` copies the raw archival scores CSV, plus the counts CSV when
-available, for explicit score-set URNs. It never searches or selects a score
-set. Resolve the latest snapshot or pin a concrete Zenodo record for
-reproducibility:
+Rows that cannot be standardized remain in the output with their `status` and
+`error` values. Pass `--drop-failed` to retain only rows whose status is `OK`.
 
-```bash
-dms-parser snapshot extract \
-    --latest \
-    --dataset-id urn:mavedb:00000003-a-1
+### Download several datasets
 
-dms-parser snapshot extract \
-    --record 20840937 \
-    --dataset-id urn:mavedb:00000003-a-1 \
-    --dataset-id urn:mavedb:00000003-a-2
-```
-
-An uncached selector may download the approximately 1.9 GB managed archive.
-Extracted tables use a separate cache under
-`<cache-root>/mavedb/snapshot_tables/<record-id>/`. Valid bundles are reused
-without reopening the archive. `--refresh` refreshes both the managed snapshot
-and every requested extraction bundle. TAR.GZ extraction may scan the archive
-metadata even though only explicitly requested files are written.
-
-Official members are derived only from the validated score-set URN by replacing
-colons with hyphens:
-
-```text
-urn:mavedb:00000003-a-1
-csv/urn-mavedb-00000003-a-1.scores.csv
-csv/urn-mavedb-00000003-a-1.counts.csv
-```
-
-The scores member is required. Counts are optional and are extracted
-automatically when present. Superseded score sets are rejected unless requested
-explicitly:
-
-```bash
-dms-parser snapshot extract \
-    --record 20840937 \
-    --dataset-id urn:mavedb:00000003-a-1 \
-    --include-superseded
-```
-
-Text output reports concrete snapshot provenance, current/superseded status,
-final file paths, counts availability, and whether each bundle was extracted or
-reused:
-
-```text
-record_id: 20840937
-doi: 10.5281/zenodo.20840937
-archive_filename: mavedb-dump.2026062418131.tar.gz
-dataset_count: 1
-dataset_id: urn:mavedb:00000003-a-1
-  status: current
-  scores_path: .../scores.csv
-  counts_path: .../counts.csv
-  cache: extracted
-```
-
-Use JSON on standard output or publish it atomically to a UTF-8 file:
-
-```bash
-dms-parser snapshot extract \
-    --record 20840937 \
-    --dataset-id urn:mavedb:00000003-a-1 \
-    --format json \
-    --output extracted-tables.json
-```
-
-The Python API deliberately separates snapshot resolution from extraction:
-
-```python
-from dms_parser import (
-    FilesystemCache,
-    extract_mavedb_snapshot_tables,
-    fetch_mavedb_snapshot,
-)
-
-cache = FilesystemCache("/data/dms-parser-cache")
-snapshot = fetch_mavedb_snapshot("20840937", cache=cache)
-result = extract_mavedb_snapshot_tables(
-    snapshot,
-    ["urn:mavedb:00000003-a-1"],
-    cache=cache,
-)
-
-print(result.tables[0].scores_path)
-print(result.tables[0].counts_path)
-```
-
-These files are raw archival CSVs. Extraction does not parse their columns,
-standardize variants, transform scores, choose compatible alternatives, or
-merge datasets. It also does not use the live MaveDB API or place raw tables in
-the standardized download cache.
-
-### Download and standardize one dataset
-
-The `download` command fetches and standardizes one substitutions dataset
-without requiring `pipeline.yml`:
-
-```bash
-dms-parser download \
-    --source proteingym \
-    --dataset-id BLAT_ECOLX_Jacquier_2013 \
-    --output-dir datasets/blat-jacquier
-
-dms-parser download \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000097-a-1 \
-    --output-dir datasets/mavedb-00000097-a-1
-```
-
-Standardized downloads support three acquisition models:
-
-| Source | Acquisition |
-| --- | --- |
-| ProteinGym | Shared bulk CSV/Parquet resources, then filter by `DMS_id` |
-| MaveDB default | Individual API acquisition by score-set URN |
-| MaveDB snapshot | Selected score tables from one explicitly prefetched, versioned snapshot |
-
-API mode remains the default and is preferable for one or a few MaveDB URNs.
-Snapshot mode is useful for larger batches, offline processing, and
-release-level reproducibility. First fetch the concrete snapshot explicitly;
-this command may download approximately 1.9 GB:
-
-```bash
-dms-parser snapshot fetch --record 20840937
-```
-
-Then standardize a selected score set entirely from that cached snapshot:
-
-```bash
-dms-parser download \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000097-a-1 \
-    --acquisition snapshot \
-    --snapshot-record 20840937 \
-    --output-dir datasets/mavedb-00000097-a-1
-```
-
-`download` never resolves or downloads the large snapshot implicitly. If the
-concrete record is absent or invalid in the cache, it reports the exact
-`snapshot fetch --record` command required. In snapshot mode, `--refresh`
-re-extracts selected raw tables from the already cached immutable archive; it
-does not contact Zenodo or reacquire the archive.
-
-`snapshot extract` returns raw archival tables. In contrast,
-`download --acquisition snapshot` feeds those cached score tables through the
-normal MaveDB builder and publishes the standard three-file dataset bundle.
-Counts tables remain optional raw data and are not used in standardization.
-ProteinGym is already bulk-first and needs no snapshot-build equivalent.
-
-Each successful command writes exactly this bundle:
-
-```text
-<output-dir>/
-├── standardized.csv
-├── summary.csv
-└── summary.json
-```
-
-Original source artifacts remain in `~/.cache/dms-parser` by default.
-`--cache-dir` changes the cache root, and `--refresh` reacquires cached source
-artifacts. `--drop-failed` removes row-level parse failures;
-`--add-wildtype-row` prepends one scoreless WT row only when no valid WT row is
-present. `--overwrite` replaces only the three deterministic files above and
-preserves unrelated files in the output directory.
-
-Regression scores are the primary standardized output. `score_raw` always
-retains the source-derived numeric values, while WT-relative scores and binary
-labels remain opt-in. A WT sequence is required to reconstruct variants, but it
-does not imply that a reliable WT score exists. `--wt-score` does not search for
-or select mutations; it supplies an explicit fallback reference only for a
-requested WT-relative score calculation. A valid numeric score from an
-observed WT row takes priority, and the fallback is used only when the dataset
-does not provide a usable observed WT score. DMS Parser never assumes that WT
-equals zero or one. Normal downloads without `--add-relative-score` do not
-require `--wt-score`:
-
-```bash
-dms-parser download \
-    --source proteingym \
-    --dataset-id BLAT_ECOLX_Jacquier_2013 \
-    --output-dir datasets/blat-difference \
-    --wt-score 1.0 \
-    --add-relative-score \
-    --relative-method difference \
-    --relative-output-col score_difference
-```
-
-Use `--wt-sequence` when trustworthy source metadata lacks a complete protein
-sequence. A fallback that conflicts with source metadata or an observed WT
-score is rejected. Ratio transforms require a finite non-zero WT score;
-logarithmic ratios additionally require every transformed score/WT ratio to be
-strictly positive. Generated score and label columns cannot replace
-`score_raw`, standardized structural fields, or existing source columns. A
-requested unsafe transform fails before publication.
-
-The Python builders likewise treat `wt_sequence` as a protein-sequence
-fallback, and `wt_fasta_path` must identify a single protein WT sequence.
-Neither manual input is automatically translated from DNA. DNA supplied in
-MaveDB source metadata is still normalized to protein automatically and
-internally before standardization.
-
-Synthetic WT insertion remains separate from score resolution. The generated
-row is marked `is_synthetic: true`, retains a missing `score_raw`, and is never
-presented as an experimental observation. Summary files record WT sequence and
-score provenance, observed/synthetic status, and the requested transform.
-
-A cached acquisition can be standardized again with different options by
-passing `--overwrite`; this replaces the output bundle without redownloading a
-valid cached artifact. MaveDB API score tables and normalized score-set
-metadata are cached independently per permanent URN, so both are reused during
-an offline rebuild. `--refresh` explicitly reacquires both MaveDB artifacts.
-
-Without an explicit transformation, no score transformation is applied. Raw
-source columns are retained, so
-"standardized" means that common fields are guaranteed, not that the output has
-an exclusive fixed schema. ProteinGym acquisition may download its complete
-substitutions benchmark before selecting one assay. Indels are not supported,
-and MaveDB datasets with nonstandard score/HGVS columns or no recoverable WT
-sequence may remain unsupported.
-
-### Download and standardize several datasets
-
-`download-many` processes several substitutions datasets from one source in
-request order, without `pipeline.yml`. Repeat the singular `--dataset-id`
-option once per dataset:
+Repeat `--dataset-id` to process an ordered batch from one source:
 
 ```bash
 dms-parser download-many \
@@ -549,405 +144,296 @@ dms-parser download-many \
     --dataset-id BRCA1_HUMAN_Findlay_2018 \
     --dataset-id PTEN_HUMAN_Mighell_2018 \
     --output-dir datasets
-
-dms-parser download-many \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000097-a-1 \
-    --dataset-id urn:mavedb:00000100-a-1 \
-    --output-dir datasets
 ```
 
-Alternatively, `--dataset-id-file` reads UTF-8 text containing one dataset
-identifier per line; blank lines are ignored and an optional UTF-8 BOM is
-accepted:
+Identifiers can also be read from a UTF-8 text file:
+
+```text
+urn:mavedb:00000001-a-4
+urn:mavedb:00000665-a-1
+urn:mavedb:00000080-a-2
+```
 
 ```bash
 dms-parser download-many \
     --source mavedb \
     --dataset-id-file mavedb_ids.txt \
-    --output-dir mavedb_download
-```
-
-When direct and file inputs are combined, direct `--dataset-id` values come
-first in their supplied order, followed by file values in file order.
-
-Use one prefetched MaveDB snapshot for a reproducible batch by repeating the
-existing singular `--dataset-id` option:
-
-```bash
-dms-parser download-many \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000097-a-1 \
-    --dataset-id urn:mavedb:00000100-a-1 \
-    --acquisition snapshot \
-    --snapshot-record 20840937 \
     --output-dir datasets
 ```
 
-The cached snapshot and its selected tables are shared across the batch while
-each requested score-set URN is standardized and published independently;
-`download-many` does not merge score sets. Superseded score sets require
-`--include-superseded`.
+The file contains one identifier per line. Blank lines are ignored; other
+lines are treated as identifiers rather than comments or structured data. If
+direct and file inputs are combined, direct identifiers are processed first.
+Duplicate identifiers are rejected.
 
-WT fallbacks for `download-many` are always dataset-specific. Repeat mappings
-in `DATASET_ID=VALUE` form; one scalar is never shared across the batch:
-
-```bash
-dms-parser download-many \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000097-a-1 \
-    --dataset-id urn:mavedb:00000100-a-1 \
-    --wt-score urn:mavedb:00000097-a-1=1.0 \
-    --wt-score urn:mavedb:00000100-a-1=-0.25 \
-    --add-relative-score \
-    --relative-method difference \
-    --output-dir datasets
-```
-
-Each ID receives a portable deterministic directory beneath the source. The
-directory name starts with `id-`, contains a sanitized form of the original
-ID, and ends with a short SHA-256 digest. The original ID remains in every
-aggregate record.
+Each dataset is written to a deterministic subdirectory. The batch root also
+contains `download-summary.csv` and `download-summary.json`:
 
 ```text
-<output-dir>/
+datasets/
 |-- download-summary.csv
 |-- download-summary.json
-`-- <source>/
-    |-- <portable-id-1>/
+`-- mavedb/
+    |-- id-<portable-dataset-id>/
     |   |-- standardized.csv
     |   |-- summary.csv
     |   `-- summary.json
-    `-- <portable-id-2>/
+    `-- id-<portable-dataset-id>/
         |-- standardized.csv
         |-- summary.csv
         `-- summary.json
 ```
 
-Expected per-dataset failures are recorded as `ERROR` and processing continues;
-successful records use `SUCCESS`. The aggregate CSV and JSON preserve request
-order and contain the source, original ID, relative output paths, successful
-row counts, and the expected error type and message when processing fails.
-Their ordered fields are `source`, `dataset_id`, `status`, `output_dir`,
-`dataset_path`, `summary_csv_path`, `summary_json_path`, `target_protein`,
-`wt_length`, `raw_rows`, `validated_rows`, `discarded_rows`, `output_rows`,
-`wildtype_rows`, `synthetic_wildtype_rows`, `error_type`, and `error`.
-Exit code `0` means every dataset succeeded, `1` means an expected operational
-failure occurred, and `2` indicates invalid command usage.
+Expected failures are recorded per dataset and do not stop the remaining
+batch.
 
-The default cache is `~/.cache/dms-parser`; `--cache-dir` changes it.
-`--refresh` reacquires each MaveDB score artifact and reacquires the shared
-ProteinGym substitutions reference and Parquet once per batch. `--overwrite`
-replaces only the three deterministic files in each rebuilt dataset bundle and
-the two aggregate summary files. Unrelated files and old bundles whose rebuild
-fails before publication are preserved, while successful bundles remain after
-another requested dataset fails.
+### Apply score transformations
 
-As with single download, score transformations are opt-in, original source
-columns are retained, and only substitutions are supported. ProteinGym may
-load the complete substitutions benchmark once for the batch. Existing MaveDB
-WT and score/HGVS-column limitations still apply.
+Source scores are copied to `score_raw` without transformation. WT-relative
+scores and pseudo-binary labels must be requested explicitly:
 
----
-
-## ⚙️ Requirements
-
-* Python ≥ 3.10
-* pandas
-* numpy
-* requests
-* pyarrow (installed for ProteinGym Parquet support)
-* PyYAML (installed for YAML configuration loading)
-
----
-
-## 🚀 Quickstart
-
-### ProteinGym example
-
-```python
-from dms_parser import build_proteingym_dataset
-
-df = build_proteingym_dataset(
-    input_path="experiment.csv",
-    variant_col="mutant",
-    score_col="DMS_score",
-    wt_sequence="MKTAYIAKQRQISFVKSHFSRQDILDLWQ",
-    add_relative_score=True,
-    add_binary_label=True,
-)
-
-df.head()
+```bash
+dms-parser download \
+    --source proteingym \
+    --dataset-id BLAT_ECOLX_Jacquier_2013 \
+    --output-dir datasets/blat-difference \
+    --add-relative-score \
+    --relative-method difference \
+    --relative-output-col score_difference
 ```
 
----
+Supported relative methods are `ratio`, `log_ratio`, `log2_ratio`, and
+`difference`. They require a valid WT score from the dataset or an explicit
+`--wt-score` fallback.
 
-### MaveDB example
+Pseudo-binary labels are calculated from a requested relative score:
 
-```python
-from dms_parser import build_mavedb_dataset
-
-df = build_mavedb_dataset(
-    input_path="scores.csv",
-    hgvs_col="hgvs_pro",
-    score_col="score",
-    wt_sequence=wt_sequence,
-)
-
-df.head()
+```bash
+dms-parser download \
+    --source proteingym \
+    --dataset-id BLAT_ECOLX_Jacquier_2013 \
+    --output-dir datasets/blat-labelled \
+    --add-relative-score \
+    --relative-method difference \
+    --add-binary-label \
+    --delta 0.1
 ```
 
----
+Run `dms-parser download --help` or
+`dms-parser download-many --help` for the complete set of WT, direction, column,
+and output options.
 
-### Pipeline configuration
+### Use MaveDB bulk snapshots
 
-Run every source in the example configuration:
+MaveDB bulk snapshots are versioned Zenodo records. The archive can be about
+1.9 GB, so snapshot acquisition is always explicit.
+
+Fetch either the latest available snapshot or a fixed record:
+
+```bash
+dms-parser snapshot fetch --latest
+dms-parser snapshot fetch --record 20840937
+```
+
+Search score-set metadata in a managed snapshot:
+
+```bash
+dms-parser discover --snapshot 20840937 --query BRCA1
+```
+
+An already extracted `main.json` can be searched directly:
+
+```bash
+dms-parser discover \
+    --main-json /data/mavedb/main.json \
+    --query BRCA1
+```
+
+Extract raw archival score and count tables for selected score sets:
+
+```bash
+dms-parser snapshot extract \
+    --record 20840937 \
+    --dataset-id urn:mavedb:00000003-a-1
+```
+
+To standardize a score set from a snapshot, first fetch the concrete record,
+then select snapshot acquisition:
+
+```bash
+dms-parser download \
+    --source mavedb \
+    --dataset-id urn:mavedb:00000001-a-4 \
+    --acquisition snapshot \
+    --snapshot-record 20840937 \
+    --output-dir datasets/ube2i-snapshot
+```
+
+`snapshot extract` returns raw archival tables. `download --acquisition
+snapshot` passes the selected score table through the normal MaveDB
+standardization workflow. Snapshot acquisition is available for `download` and
+`download-many`, not for the YAML pipeline.
+
+### Run a YAML pipeline
+
+Use a configuration file to process named datasets from either or both sources:
 
 ```bash
 dms-parser run --config examples/pipeline.yml
 ```
 
-[`examples/config.reference.yml`](examples/config.reference.yml) is the
-canonical commented YAML reference. Its active values form a valid
-configuration, and commented alternatives document other supported values.
-Runtime controls such as `--dry-run`, `--only`, and `--log-level` remain in
-`dms-parser run --help` rather than the YAML schema.
-
-Use `--only proteingym` or `--only mavedb` to select one source. Use
-`--dry-run` to validate the configuration and resolve source metadata without
-downloading score tables or writing processed datasets.
-
-The YAML example selects the logical ProteinGym resource owned by the library
-instead of repeating official URLs:
+A minimal configuration has source-specific dataset lists and an optional
+summary directory:
 
 ```yaml
 proteingym:
   resource: dms_substitutions
   dir_base: datasets/proteingym
+  default_build_kwargs:
+    drop_failed: false
   datasets:
     - dataset_id: BLAT_ECOLX_Jacquier_2013
-      build_kwargs:
-        drop_failed: true
 
 mavedb:
   dir_base: datasets/mavedb
+  default_build_kwargs:
+    drop_failed: false
   datasets:
     - dataset_id: "urn:mavedb:00000001-a-4"
+
+output:
+  summary_dir: datasets/summaries
 ```
 
-Each source section can list multiple `dataset_id` entries, which are processed
-independently in one pipeline run.
+Each dataset is processed independently. Standardized CSV files are written
+under each source's `<dir_base>/processed/` directory, and combined timestamped
+CSV and JSON summaries are written to `output.summary_dir`.
 
-ProteinGym registers `dms_substitutions`, `dms_indels`,
-`clinical_substitutions`, and `clinical_indels`. Only `dms_substitutions` is
-currently processable; selecting another registered resource for processing
-raises a clear error before downloading. ProteinGym uses its canonical
-`DMS_id` as `dataset_id`. MaveDB uses the score-set URN.
+Select one configured source with `--only proteingym` or `--only mavedb`.
+`--dry-run` validates the configuration and resolves source metadata without
+downloading score tables or writing processed datasets.
 
-Source-level `default_build_kwargs` apply to every dataset. A dataset's own
-`build_kwargs` are deep-merged over those defaults. Score transformations are
-opt-in. `drop_failed: false` retains unsupported and error rows for
-traceability; `true` saves only rows whose status is `OK`.
+[`examples/config.reference.yml`](examples/config.reference.yml) documents the
+complete YAML contract and supported builder options.
 
-Both builders and YAML `build_kwargs` accept the opt-in
-`add_wildtype_row: true` setting. It prepends one WT sequence row only when a
-valid WT row is missing. The generated row has a missing `score_raw` because no
-experimental score is inferred, and `is_synthetic` distinguishes it from
-published observations. WT-relative transformations still require a numeric
-observed WT score.
+### Inspect the cache
 
-Processed CSV files are written under each source's
-`<dir_base>/processed/` directory. The configured `output.summary_dir`
-receives combined CSV and JSON summaries. One failed dataset does not abort
-the remaining batch, and any `ERROR` summary row produces exit code `1`.
-
-Configuration loading and pipeline orchestration are also available directly
-from the installed package:
-
-```python
-from dms_parser import load_pipeline_config, run_pipeline
-
-config = load_pipeline_config("examples/pipeline.yml")
-result = run_pipeline(config)
-
-print(result.summary)
-raise SystemExit(result.exit_code)
-```
-
-`config.py` owns YAML loading and structural validation. `pipeline.py` owns
-configuration-driven ProteinGym and MaveDB execution and combined summaries.
-`downloads.py` owns independent single- and multi-dataset standardized
-downloads. The installed CLI commands are adapters over these public APIs.
-
----
-
-## 🧬 Standardized Dataset Schema
-
-All datasets are transformed into a common structure:
-
-| Column             | Description                                   |
-| ------------------ | --------------------------------------------- |
-| `variant`          | Internal mutation notation                    |
-| `mutated_sequence` | Reconstructed protein sequence                |
-| `score_raw`        | Original score                                |
-| `is_wildtype`      | WT flag                                       |
-| `is_synthetic`     | Generated-row flag                            |
-| `n_mutations`      | Number of substitutions                       |
-| `status`           | Parsing status (`OK`, `Error`, `Unsupported`) |
-| `error`            | Error message (if any)                        |
-
-Optional:
-
-* `score_log_ratio`
-* `score_binary_like`
-* `score_zscore`
-* `score_minmax`
-
----
-
-## 🔬 Transformations
-
-Numerical score transformations are opt-in. When transformation arguments are
-omitted, both dataset builders preserve source values in `score_raw`. Request
-WT-relative scores, pseudo-binary labels, z-scores, or min-max scaling
-explicitly when they are needed.
-
-### WT-relative scoring
-
-```python
-from dms_parser import add_wt_relative_score
-
-df = add_wt_relative_score(
-    df,
-    score_col="score_raw",
-    method="log_ratio",
-)
-```
-
-### Pseudo-binary labels
-
-```python
-from dms_parser import add_pseudo_binary_label
-
-df = add_pseudo_binary_label(
-    df,
-    score_col="score_log_ratio",
-    delta=0.15,
-)
-```
-
----
-
-## 🧠 Architecture
-
-The library is organized into modular components:
-
-```text
-dms_parser/
-├── builders.py        # High-level dataset construction
-├── cache.py           # Validated filesystem artifact cache
-├── catalog.py         # Common metadata records and source dispatch
-├── cli.py             # Installed command-line interface
-├── config.py          # Pipeline YAML loading and validation
-├── downloads.py       # Standardized single and batch downloads
-├── fetch.py           # Cache-aware staged downloads
-├── pipeline.py        # Configuration-driven source orchestration
-├── parsing.py         # Variant parsing logic
-├── transforms.py      # Score transformations
-├── validation.py      # Dataset and sequence validation
-├── io.py              # File I/O and downloads
-├── constants.py       # Shared constants
-├── exceptions.py      # Custom exceptions
-├── types.py           # Type definitions
-└── sources/
-    ├── mavedb.py
-    ├── mavedb_catalog.py
-    ├── proteingym.py
-    ├── proteingym_catalog.py
-    └── proteingym_resources.py
-```
-
----
-
-## 🔁 Design Principles
-
-* **Modularity**: each component is independent
-* **Explicitness**: no hidden assumptions
-* **Robustness**: strict validation and error tracking
-* **Reproducibility**: deterministic transformations
-* **Extensibility**: easy to add new sources or transformations
-
----
-
-## ⚠️ Limitations
-
-* Only supports **substitution mutations**
-* HGVS support excludes:
-
-  * insertions
-  * deletions
-  * frameshifts
-  * duplications
-* WT sequence must be provided or recoverable
-* Score interpretation depends on the dataset
-
----
-
-## 📓 Examples
-
-See the `examples/` directory:
-
-```text
-examples/01_quickstart_proteingym.ipynb
-examples/02_quickstart_mavedb_download.ipynb
-examples/03_variant_parsing_and_reconstruction.ipynb
-examples/04_transforms_and_pseudo_labels.ipynb
-examples/pipeline.yml
-```
-
----
-
-## 🧪 Testing
-
-Run the full test suite:
+The cache inventory is read-only:
 
 ```bash
-python -m pip install -e ".[dev]"
+dms-parser cache
+dms-parser cache --source proteingym
+dms-parser cache --format json
+dms-parser cache --cache-dir ./example-cache
+```
+
+It reports managed entries and structural problems without downloading,
+repairing, or deleting artifacts.
+
+### Exit codes and logging
+
+The CLI uses these exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The command completed successfully |
+| `1` | An expected acquisition, processing, cache, or output failure occurred |
+| `2` | Command usage was invalid |
+
+Commands log at `INFO` by default. Use `--log-level DEBUG`, `WARNING`, or
+`ERROR` to change the level.
+
+## Standardized output
+
+The builders preserve original source columns and add a common set of fields:
+
+| Column | Description |
+| --- | --- |
+| `dataset_id` | Source dataset identifier |
+| `source` | `proteingym` or `mavedb` |
+| `protein_id` | Source-derived protein identifier, when available |
+| `gene` | Source-derived gene name, when available |
+| `uniprot_id` | Source-derived UniProt identifier, when available |
+| `wt_sequence` | Wild-type protein sequence used for reconstruction |
+| `variant` | Normalized internal substitution notation |
+| `mutated_sequence` | Reconstructed protein sequence |
+| `is_wildtype` | Whether the row represents wild type |
+| `is_synthetic` | Whether the row was generated by the builder |
+| `n_mutations` | Number of substitutions in the row |
+| `score_raw` | Numeric copy of the selected source score |
+| `status` | `OK`, `Error`, or `Unsupported` |
+| `error` | Row-level parsing or reconstruction error |
+
+Requested transformations add their configured output columns. ProteinGym
+parsing also adds `parsed_*` fields, and source-specific columns remain in the
+table.
+
+The accompanying summary files record dataset-level row counts, output paths,
+WT provenance, and requested transformations.
+
+## Python API
+
+### Build from a local table
+
+```python
+from dms_parser import build_proteingym_dataset
+
+dataset = build_proteingym_dataset(
+    input_path="experiment.csv",
+    score_col="DMS_score",
+    variant_col="mutant",
+    wt_sequence="MKTAYIAKQRQISFVKSHFSRQDILDLWQ",
+    dataset_id="example-assay",
+)
+```
+
+Use `build_mavedb_dataset` for a local MaveDB-like table with protein HGVS
+variants.
+
+### Download programmatically
+
+```python
+from pathlib import Path
+
+from dms_parser import FilesystemCache, download_and_standardize_dataset
+
+result = download_and_standardize_dataset(
+    "mavedb",
+    "urn:mavedb:00000001-a-4",
+    output_dir="datasets/ube2i",
+    cache=FilesystemCache(Path.home() / ".cache" / "dms-parser"),
+)
+
+print(result.dataset_path)
+```
+
+The package also exports catalog, parsing, transformation, validation,
+snapshot, cache, and configuration APIs through `dms_parser`.
+
+## Examples
+
+The `examples/` directory contains:
+
+- [`01_quickstart_proteingym.ipynb`](examples/01_quickstart_proteingym.ipynb):
+  download and standardize a ProteinGym assay.
+- [`02_quickstart_mavedb_download.ipynb`](examples/02_quickstart_mavedb_download.ipynb):
+  obtain and standardize a MaveDB score set.
+- [`03_variant_parsing_and_reconstruction.ipynb`](examples/03_variant_parsing_and_reconstruction.ipynb):
+  parse substitutions and reconstruct sequences.
+- [`04_transforms_and_pseudo_labels.ipynb`](examples/04_transforms_and_pseudo_labels.ipynb):
+  apply score transformations and pseudo-binary labels.
+- [`pipeline.yml`](examples/pipeline.yml): example configuration for
+  `dms-parser run`.
+- [`config.reference.yml`](examples/config.reference.yml): commented reference
+  for the YAML configuration.
+
+## Testing
+
+```bash
 python -m pytest
 ```
 
----
+## License
 
-## 🔮 Roadmap
-
-* [ ] Support for indels (partial HGVS)
-* [ ] Automatic WT extraction improvements
-* [ ] Integration with representation libraries (e.g., Sylphy)
-* [ ] Dataset versioning utilities
-* [x] Configuration-driven `run` command
-
----
-
-## 🤝 Integration in a larger ecosystem
-
-This library is designed to integrate with:
-
-* **Representation layers** (e.g., protein embeddings)
-* **Clustering frameworks**
-* **Low-N ML pipelines**
-* **Protein engineering workflows**
-
----
-
-## 📄 License
-
-GNU General Public License V3 License
-
----
-
-## 👤 Author
-
-KrenAI Lab
-Computational Protein Engineering & Machine Learning
-
----
+This project is distributed under the GNU General Public License v3. See
+[`LICENSE`](LICENSE).
