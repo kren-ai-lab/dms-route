@@ -445,7 +445,16 @@ def test_run_pipeline_preserves_ambiguous_mavedb_raw_wt_scores(
         / "processed"
         / "urn_mavedb_00000001-a-4_processed.csv"
     )
-    assert pd.read_csv(output_path)["score_raw"].tolist() == [1.0, 2.0, 0.5]
+    output = pd.read_csv(output_path)
+    assert output["score_raw"].tolist() == [1.0, 2.0, 0.5]
+    assert output.loc[
+        :1,
+        ["parsed_position", "parsed_wt_aa", "parsed_mut_aa"],
+    ].isna().all().all()
+    assert output.loc[
+        2,
+        ["parsed_position", "parsed_wt_aa", "parsed_mut_aa"],
+    ].tolist() == [1.0, "M", "A"]
 
 
 def test_dataset_failure_does_not_abort_later_dataset(

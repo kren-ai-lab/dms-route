@@ -582,6 +582,11 @@ def build_mavedb_dataset(
 
     parsed = df[hgvs_col].apply(lambda value: _safe_hgvs_to_sequence(wt_seq, value))
     parsed_df = pd.DataFrame(parsed.tolist(), index=df.index)
+    variant_info = parse_variant_series(
+        parsed_df["variant"],
+        strict=False,
+        prefix="parsed_",
+    )[["parsed_position", "parsed_wt_aa", "parsed_mut_aa"]]
 
     return _finalize_dataset(
         df,
@@ -593,6 +598,7 @@ def build_mavedb_dataset(
         protein_id=protein_id,
         gene=gene,
         uniprot_id=uniprot_id,
+        variant_info=variant_info,
         add_relative_score=add_relative_score,
         relative_method=relative_method,
         relative_output_col=relative_output_col,

@@ -312,6 +312,9 @@ def test_mavedb_complete_identity_builds_observed_wt(
     assert observed["n_mutations"] == 0
     assert observed["is_synthetic"] == False
     assert observed["score_raw"] == 2.5
+    assert observed[
+        ["parsed_position", "parsed_wt_aa", "parsed_mut_aa"]
+    ].isna().all()
 
 
 @pytest.mark.parametrize("hgvs_pro", ["p.[=]", "p.[=;=]"])
@@ -360,6 +363,14 @@ def test_mavedb_mixed_equality_builds_only_substitutions(
         "AKTAYIAKQRQISFVKSHFSRQDILDLWQ",
         "ARTAYIAKQRQISFVKSHFSRQDILDLWQ",
     ]
+    assert result.loc[
+        0,
+        ["parsed_position", "parsed_wt_aa", "parsed_mut_aa"],
+    ].tolist() == [1, "M", "A"]
+    assert result.loc[
+        1,
+        ["parsed_position", "parsed_wt_aa", "parsed_mut_aa"],
+    ].isna().all()
 
 
 def test_raw_mavedb_build_preserves_ambiguous_observed_wt_scores(
@@ -708,6 +719,10 @@ def test_build_mavedb_dataset_basic(tmp_path, mavedb_like_df: pd.DataFrame, wt_s
     assert "mutated_sequence" in result.columns
     assert "status" in result.columns
     assert (result["status"] == "OK").all()
+    assert result["variant"].tolist() == ["M1A", "K2K", "T3Y"]
+    assert result["parsed_position"].tolist() == [1, 2, 3]
+    assert result["parsed_wt_aa"].tolist() == ["M", "K", "T"]
+    assert result["parsed_mut_aa"].tolist() == ["A", "K", "Y"]
     pd.testing.assert_series_equal(
         result["score_raw"].reset_index(drop=True),
         mavedb_like_df["score"],
@@ -744,6 +759,14 @@ def test_build_mavedb_dataset_with_unsupported_variant(tmp_path, wt_sequence: st
         "Unsupported",
         "Error",
     ]
+    assert result.loc[
+        0,
+        ["parsed_position", "parsed_wt_aa", "parsed_mut_aa"],
+    ].tolist() == [1, "M", "A"]
+    assert result.loc[
+        1:,
+        ["parsed_position", "parsed_wt_aa", "parsed_mut_aa"],
+    ].isna().all().all()
 
 
 def test_build_mavedb_dataset_supports_bounded_indels_and_transforms(tmp_path):
@@ -772,6 +795,9 @@ def test_build_mavedb_dataset_supports_bounded_indels_and_transforms(tmp_path):
     assert result["is_wildtype"].tolist() == [True, False, False]
     assert result["is_synthetic"].tolist() == [False, False, False]
     assert result["n_mutations"].tolist() == [0, 1, 1]
+    assert result[
+        ["parsed_position", "parsed_wt_aa", "parsed_mut_aa"]
+    ].isna().all().all()
 
 
 def test_build_mavedb_dataset_indels_preserve_drop_failed_and_synthetic_wt(tmp_path):
@@ -797,6 +823,9 @@ def test_build_mavedb_dataset_indels_preserve_drop_failed_and_synthetic_wt(tmp_p
     assert result["status"].tolist() == ["OK", "OK"]
     assert result["is_synthetic"].tolist() == [True, False]
     assert result["n_mutations"].tolist() == [0, 1]
+    assert result[
+        ["parsed_position", "parsed_wt_aa", "parsed_mut_aa"]
+    ].isna().all().all()
     assert pd.isna(result.iloc[0]["score_raw"])
     assert result.iloc[1]["score_raw"] == 0.25
 

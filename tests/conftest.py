@@ -36,7 +36,7 @@ def proteingym_like_df() -> pd.DataFrame:
 def mavedb_like_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "hgvs_pro": ["p.Met1Ala", "p.Lys2Arg", "p.Thr3Tyr"],
+            "hgvs_pro": ["p.Met1Ala", "p.Lys2=", "p.Thr3Tyr"],
             "score": [0.8, 1.2, 0.1],
         }
     )
