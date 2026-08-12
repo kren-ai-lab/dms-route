@@ -188,7 +188,7 @@ def _safe_authoritative_sequence(
         out["mutated_sequence"] = sequence
         out["is_wildtype"] = is_wildtype
         out["n_mutations"] = 0 if is_wildtype else None
-    except Exception as exc:
+    except SequenceValidationError as exc:
         out["status"] = "Error"
         out["error"] = str(exc)
 

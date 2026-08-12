@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 import dms_parser
+import dms_parser.builders as builders_module
 from dms_parser._wildtype import get_wt_resolution
 from dms_parser.builders import (
     build_mavedb_dataset,
@@ -15,6 +16,7 @@ from dms_parser.builders import (
 from dms_parser.exceptions import (
     InvalidDatasetError,
     MissingWildTypeError,
+    SequenceValidationError,
     WildTypeConflictError,
 )
 from dms_parser.sources.proteingym_resources import get_proteingym_resource
@@ -254,6 +256,58 @@ def test_invalid_mutated_sequences_are_row_errors_and_drop_failed(tmp_path):
     assert result["score_raw"].tolist() == [0.1, 0.2, 0.3]
     assert dropped["status"].tolist() == ["OK"]
     assert dropped["mutated_sequence"].tolist() == ["MT"]
+
+
+def test_expected_mutant_sequence_validation_error_is_row_error(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = _write_indel_table(
+        tmp_path,
+        pd.DataFrame(
+            {
+                "target_seq": ["MKT"],
+                "mutated_sequence": ["MT"],
+                "DMS_score": [0.25],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        builders_module,
+        "validate_wt_sequence",
+        lambda sequence: (_ for _ in ()).throw(
+            SequenceValidationError("invalid mutant sequence")
+        ),
+    )
+
+    result = build_proteingym_indel_dataset(path, score_col="DMS_score")
+
+    assert result.loc[0, "status"] == "Error"
+    assert result.loc[0, "error"] == "invalid mutant sequence"
+
+
+def test_unexpected_mutant_sequence_validation_error_propagates(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = _write_indel_table(
+        tmp_path,
+        pd.DataFrame(
+            {
+                "target_seq": ["MKT"],
+                "mutated_sequence": ["MT"],
+                "DMS_score": [0.25],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        builders_module,
+        "validate_wt_sequence",
+        lambda sequence: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        build_proteingym_indel_dataset(path, score_col="DMS_score")
 
 
 def test_proteingym_indel_builder_rejects_conflicting_target_sequences(tmp_path):

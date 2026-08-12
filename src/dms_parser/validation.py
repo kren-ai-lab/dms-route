@@ -296,6 +296,13 @@ def validate_standard_dataset(
             validate_wt_sequence(non_null_wt.iloc[0])
 
     if authoritative_sequence_mode:
+        notation_rows = df.index[df[variant_col].notna()].tolist()
+        if notation_rows:
+            raise InvalidDatasetError(
+                "Authoritative sequence rows must not contain variant notation "
+                f"at rows {notation_rows[:10]}."
+            )
+
         ok_rows = df[df["status"] == "OK"]
         validate_sequence_column(
             ok_rows,
@@ -307,6 +314,47 @@ def validate_standard_dataset(
             "mutated_sequence",
             allow_na=False,
         )
+        wildtype_mismatch_rows: list[int] = []
+        wt_count_rows: list[int] = []
+        non_wt_count_rows: list[int] = []
+        for idx, row in ok_rows.iterrows():
+            sequence_is_wildtype = (
+                row["mutated_sequence"] == row["wt_sequence"]
+            )
+            observed_is_wildtype = row[wt_col]
+            if (
+                pd.isna(observed_is_wildtype)
+                or observed_is_wildtype not in (True, False)
+                or bool(observed_is_wildtype) != sequence_is_wildtype
+            ):
+                wildtype_mismatch_rows.append(idx)
+
+            mutation_count = row[n_mutations_col]
+            if sequence_is_wildtype:
+                numeric_count = pd.to_numeric(
+                    pd.Series([mutation_count]),
+                    errors="coerce",
+                ).iloc[0]
+                if pd.isna(numeric_count) or float(numeric_count) != 0:
+                    wt_count_rows.append(idx)
+            elif not pd.isna(mutation_count):
+                non_wt_count_rows.append(idx)
+
+        if wildtype_mismatch_rows:
+            raise InvalidDatasetError(
+                "Authoritative sequence rows have inconsistent is_wildtype "
+                f"values at rows {wildtype_mismatch_rows[:10]}."
+            )
+        if wt_count_rows:
+            raise InvalidDatasetError(
+                "Authoritative WT rows must have n_mutations == 0 at rows "
+                f"{wt_count_rows[:10]}."
+            )
+        if non_wt_count_rows:
+            raise InvalidDatasetError(
+                "Authoritative non-WT rows must have missing n_mutations at "
+                f"rows {non_wt_count_rows[:10]}."
+            )
 
     if require_wt:
         validate_wt_presence(

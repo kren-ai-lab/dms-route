@@ -159,25 +159,29 @@ def test_validate_standard_dataset_passes(standardized_dataset: pd.DataFrame):
     )
 
 
-def test_authoritative_sequence_mode_alone_allows_all_null_variants():
-    df = pd.DataFrame(
+def _authoritative_sequence_dataset() -> pd.DataFrame:
+    return pd.DataFrame(
         {
-            "dataset_id": ["assay"],
-            "source": ["proteingym"],
-            "protein_id": [None],
-            "gene": [None],
-            "uniprot_id": [None],
-            "score_raw": [0.5],
-            "variant": [None],
-            "is_wildtype": [False],
-            "is_synthetic": [False],
-            "n_mutations": [None],
-            "wt_sequence": ["MKT"],
-            "mutated_sequence": ["MT"],
-            "status": ["OK"],
-            "error": [""],
+            "dataset_id": ["assay", "assay", "assay"],
+            "source": ["proteingym"] * 3,
+            "protein_id": [None] * 3,
+            "gene": [None] * 3,
+            "uniprot_id": [None] * 3,
+            "score_raw": [0.5, 1.0, None],
+            "variant": [None] * 3,
+            "is_wildtype": [False, True, True],
+            "is_synthetic": [False, False, True],
+            "n_mutations": [None, 0, 0],
+            "wt_sequence": ["MKT"] * 3,
+            "mutated_sequence": ["MT", "MKT", "MKT"],
+            "status": ["OK"] * 3,
+            "error": [""] * 3,
         }
     )
+
+
+def test_authoritative_sequence_mode_enforces_and_accepts_valid_rows():
+    df = _authoritative_sequence_dataset()
 
     with pytest.raises(InvalidDatasetError):
         validate_standard_dataset(df, require_status=True)
@@ -189,25 +193,32 @@ def test_authoritative_sequence_mode_alone_allows_all_null_variants():
     )
 
 
+@pytest.mark.parametrize(
+    ("row", "column", "value"),
+    [
+        (0, "variant", "M2del"),
+        (0, "n_mutations", 1),
+        (1, "n_mutations", None),
+        (1, "n_mutations", 1),
+        (0, "is_wildtype", True),
+        (1, "is_wildtype", False),
+    ],
+)
+def test_authoritative_sequence_mode_rejects_contradictory_rows(
+    row: int,
+    column: str,
+    value: object,
+) -> None:
+    df = _authoritative_sequence_dataset()
+    df.at[row, column] = value
+
+    with pytest.raises(InvalidDatasetError):
+        validate_standard_dataset(df, authoritative_sequence_mode=True)
+
+
 def test_authoritative_sequence_mode_validates_ok_mutant_sequences():
-    df = pd.DataFrame(
-        {
-            "dataset_id": ["assay"],
-            "source": ["proteingym"],
-            "protein_id": [None],
-            "gene": [None],
-            "uniprot_id": [None],
-            "score_raw": [0.5],
-            "variant": [None],
-            "is_wildtype": [False],
-            "is_synthetic": [False],
-            "n_mutations": [None],
-            "wt_sequence": ["MKT"],
-            "mutated_sequence": ["MJ"],
-            "status": ["OK"],
-            "error": [""],
-        }
-    )
+    df = _authoritative_sequence_dataset()
+    df.at[0, "mutated_sequence"] = "MJ"
 
     with pytest.raises(InvalidDatasetError):
         validate_standard_dataset(df, authoritative_sequence_mode=True)
