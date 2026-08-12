@@ -309,6 +309,9 @@ def _finalize_dataset(
             out,
             wt_score,
             dataset_id=dataset_id or "dataset",
+            allow_ambiguous_observed_scores=(
+                not add_relative_score and wt_score is None
+            ),
         )
     )
 

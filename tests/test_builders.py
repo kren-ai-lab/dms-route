@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 import dms_parser.builders as builders_module
+from dms_parser._wildtype import resolve_wt_score
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
 from dms_parser.constants import NEUTRAL_LABEL
 from dms_parser.exceptions import (
@@ -359,6 +360,104 @@ def test_mavedb_mixed_equality_builds_only_substitutions(
         "AKTAYIAKQRQISFVKSHFSRQDILDLWQ",
         "ARTAYIAKQRQISFVKSHFSRQDILDLWQ",
     ]
+
+
+def test_raw_mavedb_build_preserves_ambiguous_observed_wt_scores(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        "mavedb",
+        ["p.=", "p.[=;=]", "p.Met1Ala"],
+        [1.0, 2.0, 0.5],
+        wt_sequence=wt_sequence,
+    )
+
+    assert result["score_raw"].tolist() == [1.0, 2.0, 0.5]
+    assert result["is_wildtype"].tolist() == [True, True, False]
+    assert result["is_synthetic"].tolist() == [False, False, False]
+    resolution = result.attrs["dms_parser_wt_resolution"]
+    assert resolution["score"] is None
+    assert resolution["score_provenance"] is None
+    assert resolution["observed_wildtype_row"] is True
+    assert (
+        resolution["score_unavailable_reason"]
+        == "conflicting_observed_wildtype_scores"
+    )
+
+
+@pytest.mark.parametrize("require_wt_for_transforms", [False, True])
+def test_mavedb_transform_rejects_ambiguous_observed_wt_scores(
+    require_wt_for_transforms: bool,
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    with pytest.raises(WildTypeConflictError, match="Conflicting WT scores"):
+        _build_source_dataset(
+            tmp_path,
+            "mavedb",
+            ["p.=", "p.[=;=]", "p.Met1Ala"],
+            [1.0, 2.0, 0.5],
+            wt_sequence=wt_sequence,
+            add_relative_score=True,
+            relative_method="difference",
+            require_wt_for_transforms=require_wt_for_transforms,
+        )
+
+
+def test_wt_score_fallback_rejects_ambiguous_observed_evidence(
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    with pytest.raises(WildTypeConflictError, match="Conflicting WT scores"):
+        _build_source_dataset(
+            tmp_path,
+            "mavedb",
+            ["p.=", "p.[=;=]"],
+            [1.0, 2.0],
+            wt_sequence=wt_sequence,
+            wt_score=1.0,
+        )
+
+
+@pytest.mark.parametrize("scores", [[1.0, 1.0], [1.0, 1.0 + 1e-10]])
+def test_equal_or_equivalent_observed_wt_scores_still_resolve(
+    scores: list[float],
+    tmp_path,
+    wt_sequence: str,
+) -> None:
+    result = _build_source_dataset(
+        tmp_path,
+        "mavedb",
+        ["p.=", "p.[=;=]"],
+        scores,
+        wt_sequence=wt_sequence,
+    )
+
+    resolution = result.attrs["dms_parser_wt_resolution"]
+    assert resolution["score"] == 1.0
+    assert resolution["score_provenance"] == "observed_wildtype_row"
+    assert resolution["score_unavailable_reason"] is None
+
+
+def test_automatic_wt_score_evidence_keeps_ambiguous_rows_strict() -> None:
+    table = pd.DataFrame(
+        {
+            "score_raw": [1.0, 2.0],
+            "is_wildtype": [True, True],
+            "status": ["OK", "OK"],
+        }
+    )
+
+    with pytest.raises(WildTypeConflictError, match="Conflicting WT scores"):
+        resolve_wt_score(
+            table,
+            None,
+            dataset_id="dataset",
+            automatic=(("metadata", 1.0),),
+            allow_ambiguous_observed_scores=True,
+        )
 
 
 def test_drop_failed_precedes_synthetic_wt_insertion(

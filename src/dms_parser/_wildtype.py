@@ -106,8 +106,13 @@ def resolve_wt_score(
     *,
     dataset_id: str,
     automatic: Iterable[tuple[str, float]] = (),
+    allow_ambiguous_observed_scores: bool = False,
 ) -> tuple[float | None, str | None, bool, str | None]:
-    """Resolve an observed, metadata, or explicitly supplied WT score."""
+    """Resolve an observed, metadata, or explicitly supplied WT score.
+
+    An internal raw-build policy may mark ambiguous observed-only scores as
+    unavailable while keeping strict resolution as the default.
+    """
     observed = table["is_wildtype"].eq(True)
     if "status" in table.columns:
         observed &= table["status"].eq("OK")
@@ -122,7 +127,9 @@ def resolve_wt_score(
     ).dropna()
     for value in observed_values:
         candidates.append(("observed_wildtype_row", _finite_score(value, "observed WT score")))
+    automatic_exists = False
     for origin, value in automatic:
+        automatic_exists = True
         candidates.append((origin, _finite_score(value, f"WT score from {origin}")))
 
     resolved_score: float | None = None
@@ -140,7 +147,20 @@ def resolve_wt_score(
             )
         ]
         if conflicts:
-            origins = ", ".join([resolved_origin, *conflicts])
+            if (
+                allow_ambiguous_observed_scores
+                and fallback is None
+                and not automatic_exists
+            ):
+                return (
+                    None,
+                    None,
+                    observed_exists,
+                    "conflicting_observed_wildtype_scores",
+                )
+            origins = ", ".join(
+                dict.fromkeys([resolved_origin, *conflicts])
+            )
             raise WildTypeConflictError(
                 f"Conflicting WT scores for {dataset_id!r} from {origins}."
             )

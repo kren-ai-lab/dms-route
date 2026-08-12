@@ -207,6 +207,11 @@ Supported relative methods are `ratio`, `log_ratio`, `log2_ratio`, and
 `difference`. They require a valid WT score from the dataset or an explicit
 `--wt-score` fallback.
 
+Raw standardization preserves source scores when multiple observed protein-WT
+rows do not define one unique WT reference; the summary reports that the WT
+score is unavailable. Requested WT-relative transformations still reject this
+ambiguity.
+
 Pseudo-binary labels are calculated from a requested relative score:
 
 ```bash

@@ -58,6 +58,44 @@ def test_compute_wt_score_rejects_conflicting_observed_rows():
         compute_wt_score(df, "score_raw", status_col="status")
 
 
+def test_direct_wt_transform_rejects_conflicting_observed_rows():
+    df = pd.DataFrame(
+        {
+            "score_raw": [2.0, 4.0, 1.0],
+            "is_wildtype": [True, True, False],
+            "status": ["OK", "OK", "OK"],
+        }
+    )
+
+    with pytest.raises(WildTypeConflictError, match="Conflicting WT scores"):
+        add_wt_relative_score(
+            df,
+            "score_raw",
+            method="difference",
+            output_col="relative",
+            status_col="status",
+        )
+
+
+def test_conflicting_observed_wt_message_is_compact() -> None:
+    row_count = 10_000
+    df = pd.DataFrame(
+        {
+            "score_raw": np.tile([2.0, 4.0], row_count // 2),
+            "is_wildtype": [True] * row_count,
+            "status": ["OK"] * row_count,
+        }
+    )
+
+    with pytest.raises(WildTypeConflictError) as exc_info:
+        compute_wt_score(df, "score_raw", status_col="status")
+
+    message = str(exc_info.value)
+    assert message.startswith("Conflicting WT scores for ")
+    assert message.count("observed_wildtype_row") == 1
+    assert len(message) < 500
+
+
 def test_compute_wt_score_rejects_only_scoreless_wt():
     df = pd.DataFrame(
         {

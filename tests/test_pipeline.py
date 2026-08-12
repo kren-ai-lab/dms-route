@@ -385,6 +385,69 @@ def test_mavedb_scores_score_column_is_auto_detected_exactly(
     assert builder_calls[0]["score_col"] == "scores.score"
 
 
+def test_run_pipeline_preserves_ambiguous_mavedb_raw_wt_scores(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-4"
+
+    class MetadataResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "targetGenes": [{"name": "GENE"}],
+                "targetSequence": {"sequence": "MKT"},
+            }
+
+    class ScoresResponse:
+        status_code = 200
+        text = (
+            "hgvs_pro,score\n"
+            "p.=,1.0\n"
+            "p.[=;=],2.0\n"
+            "p.Met1Ala,0.5\n"
+        )
+
+        def raise_for_status(self) -> None:
+            """Represent a successful score response."""
+
+    monkeypatch.setattr(
+        pipeline_module.requests,
+        "get",
+        lambda url, timeout: (
+            ScoresResponse() if url.endswith("/scores") else MetadataResponse()
+        ),
+    )
+
+    result = run_pipeline(
+        {
+            "mavedb": {
+                "dir_base": tmp_path / "mavedb",
+                "datasets": [{"dataset_id": dataset_id}],
+            },
+            "output": {"summary_dir": tmp_path / "summaries"},
+        }
+    )
+
+    assert result.exit_code == 0
+    assert result.summary[0]["status"] == "OK"
+    assert result.summary[0]["wt_score"] is None
+    assert result.summary[0]["wt_score_provenance"] is None
+    assert result.summary[0]["observed_wildtype_row"] is True
+    assert (
+        result.summary[0]["wt_score_unavailable_reason"]
+        == "conflicting_observed_wildtype_scores"
+    )
+    output_path = (
+        tmp_path
+        / "mavedb"
+        / "processed"
+        / "urn_mavedb_00000001-a-4_processed.csv"
+    )
+    assert pd.read_csv(output_path)["score_raw"].tolist() == [1.0, 2.0, 0.5]
+
+
 def test_dataset_failure_does_not_abort_later_dataset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

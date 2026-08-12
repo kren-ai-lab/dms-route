@@ -153,6 +153,26 @@ def _build_offline_mavedb_scores(
     return built
 
 
+def _ambiguous_mavedb_download_input(
+    tmp_path: Path,
+    dataset_id: str,
+) -> downloads_module._MaveDBDownloadInput:
+    """Return local MaveDB inputs with conflicting protein-WT scores."""
+    scores_path = tmp_path / "ambiguous-scores.csv"
+    scores_path.write_text(
+        "hgvs_pro,score\n"
+        "p.=,1.0\n"
+        "p.[=;=],2.0\n"
+        "p.Met1Ala,0.5\n",
+        encoding="utf-8",
+    )
+    return downloads_module._MaveDBDownloadInput(
+        scores_path=scores_path,
+        metadata=_snapshot_score_set(dataset_id),
+        provenance={},
+    )
+
+
 def test_legacy_mavedb_score_column_remains_supported(tmp_path: Path) -> None:
     table = _build_offline_mavedb_scores(
         tmp_path,
@@ -161,6 +181,90 @@ def test_legacy_mavedb_score_column_remains_supported(tmp_path: Path) -> None:
 
     assert table["score_raw"].tolist() == [2.5, -0.125]
     assert table["mutated_sequence"].tolist() == ["MKT", "AKT"]
+
+
+def test_single_mavedb_download_publishes_ambiguous_raw_wt_scores(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-4"
+    acquired = _ambiguous_mavedb_download_input(tmp_path, dataset_id)
+    monkeypatch.setattr(
+        downloads_module,
+        "_acquire_mavedb_api_dataset",
+        lambda *args, **kwargs: acquired,
+    )
+
+    result = download_and_standardize_dataset(
+        "mavedb",
+        dataset_id,
+        output_dir=tmp_path / "single",
+        cache=FilesystemCache(tmp_path / "cache"),
+    )
+
+    assert result.dataset_path.is_file()
+    assert result.summary_csv_path.is_file()
+    assert result.summary_json_path.is_file()
+    assert pd.read_csv(result.dataset_path)["score_raw"].tolist() == [
+        1.0,
+        2.0,
+        0.5,
+    ]
+    assert result.summary["status"] == "OK"
+    assert result.summary["wt_score"] is None
+    assert result.summary["wt_score_provenance"] is None
+    assert result.summary["observed_wildtype_row"] is True
+    assert (
+        result.summary["wt_score_unavailable_reason"]
+        == "conflicting_observed_wildtype_scores"
+    )
+
+
+def test_mavedb_batch_distinguishes_raw_and_transformed_ambiguous_wt_scores(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = "urn:mavedb:00000001-a-4"
+    acquired = _ambiguous_mavedb_download_input(tmp_path, dataset_id)
+    monkeypatch.setattr(
+        downloads_module,
+        "_acquire_mavedb_api_dataset",
+        lambda *args, **kwargs: acquired,
+    )
+    cache = FilesystemCache(tmp_path / "cache")
+
+    raw = download_and_standardize_datasets(
+        "mavedb",
+        [dataset_id],
+        output_dir=tmp_path / "raw-batch",
+        cache=cache,
+    )
+    transformed = download_and_standardize_datasets(
+        "mavedb",
+        [dataset_id],
+        output_dir=tmp_path / "transformed-batch",
+        cache=cache,
+        add_relative_score=True,
+        relative_method="difference",
+    )
+
+    assert raw.exit_code == 0
+    assert raw.success_count == 1
+    assert raw.entries[0].result is not None
+    raw_records = json.loads(raw.summary_json_path.read_text(encoding="utf-8"))
+    assert raw_records[0]["status"] == "SUCCESS"
+    assert (
+        raw_records[0]["wt_score_unavailable_reason"]
+        == "conflicting_observed_wildtype_scores"
+    )
+    assert transformed.exit_code == 1
+    assert transformed.failure_count == 1
+    assert transformed.entries[0].result is None
+    assert transformed.entries[0].error_type == "WildTypeConflictError"
+    transformed_records = json.loads(
+        transformed.summary_json_path.read_text(encoding="utf-8")
+    )
+    assert transformed_records[0]["status"] == "ERROR"
 
 
 def test_mavedb_dna_target_sequence_is_translated_before_standardization(
