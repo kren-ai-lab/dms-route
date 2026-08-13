@@ -14,8 +14,8 @@ and pseudo-binary labels are optional.
 `dmsroute` requires Python 3.10 or newer.
 
 ```bash
-git clone https://github.com/kren-ai-lab/parsing_dms_data.git
-cd parsing_dms_data
+git clone https://github.com/kren-ai-lab/dms-route.git
+cd dms-route
 python -m pip install -e .
 ```
 

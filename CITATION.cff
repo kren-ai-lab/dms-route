@@ -5,7 +5,7 @@ abstract: "Utilities for acquiring, parsing, validating, harmonizing, and standa
 version: 0.1.0
 type: software
 license: "GPL-3.0-or-later"
-url: "https://github.com/kren-ai-lab/DMSRoute"
+url: "https://github.com/kren-ai-lab/dms-route"
 authors:
   - family-names: "Fernández-Villegas"
     given-names: "Diego"
@@ -23,7 +23,7 @@ authors:
     given-names: "David"
     affiliation: "Universidad de Magallanes"
 
-repository-code: "https://github.com/kren-ai-lab/DMSRoute"
+repository-code: "https://github.com/kren-ai-lab/dms-route"
 keywords:
   - "deep mutational scanning"
   - "data harmonization"
@@ -32,3 +32,7 @@ keywords:
   - "ProteinGym"
   - "bioinformatics"
   - "protein"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.21924523"
+    description: "Zenodo DOI for DMSRoute v0.1.0"
