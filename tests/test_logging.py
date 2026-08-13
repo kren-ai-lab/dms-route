@@ -8,17 +8,17 @@ import pandas as pd
 import pytest
 import requests
 
-import dms_parser
-import dms_parser.acquisition.fetch as fetch_module
-import dms_parser.acquisition.io as io_module
-from dms_parser import (
+import dmsroute
+import dmsroute.acquisition.fetch as fetch_module
+import dmsroute.acquisition.io as io_module
+from dmsroute import (
     FilesystemCache,
     MaveDBCatalog,
     ProteinGymCatalog,
     build_proteingym_dataset,
     fetch_to_cache,
 )
-from dms_parser.core.exceptions import DownloadError
+from dmsroute.core.exceptions import DownloadError
 
 
 class JsonResponse:
@@ -70,13 +70,13 @@ def test_import_does_not_configure_root_logger() -> None:
     original_handlers = tuple(root_logger.handlers)
     original_level = root_logger.level
 
-    importlib.reload(dms_parser)
+    importlib.reload(dmsroute)
 
     assert tuple(root_logger.handlers) == original_handlers
     assert root_logger.level == original_level
     assert any(
         isinstance(handler, logging.NullHandler)
-        for handler in logging.getLogger("dms_parser").handlers
+        for handler in logging.getLogger("dmsroute").handlers
     )
 
 
@@ -100,7 +100,7 @@ def test_info_reports_cache_miss_and_hit_without_changing_result(
 
     monkeypatch.setattr(fetch_module, "download_file", offline_download)
     cache = FilesystemCache(tmp_path / "cache")
-    caplog.set_level(logging.INFO, logger="dms_parser")
+    caplog.set_level(logging.INFO, logger="dmsroute")
 
     first = fetch_to_cache(
         "https://example.test/data.csv",
@@ -133,7 +133,7 @@ def test_debug_reports_cache_diagnostics(
         b"cached content",
     )
     caplog.clear()
-    caplog.set_level(logging.DEBUG, logger="dms_parser.acquisition.cache")
+    caplog.set_level(logging.DEBUG, logger="dmsroute.acquisition.cache")
 
     result = cache.resolve("example", "dataset-1")
 
@@ -154,7 +154,7 @@ def test_catalog_listing_reports_source_and_result_count(
     catalog = ProteinGymCatalog(substitutions_path=substitutions_path)
     caplog.set_level(
         logging.INFO,
-        logger="dms_parser.sources.proteingym_catalog",
+        logger="dmsroute.sources.proteingym_catalog",
     )
 
     records = catalog.list_datasets(variant_type="substitutions")
@@ -176,7 +176,7 @@ def test_metadata_lookup_reports_source_and_dataset_id(
     )
     caplog.set_level(
         logging.INFO,
-        logger="dms_parser.sources.mavedb_catalog",
+        logger="dmsroute.sources.mavedb_catalog",
     )
 
     record = catalog.get_metadata(dataset_id)
@@ -205,7 +205,7 @@ def test_builder_logs_aggregate_counts_without_wt_or_row_flood(
             "DMS_score": list(range(row_count)),
         }
     ).to_csv(input_path, index=False)
-    caplog.set_level(logging.DEBUG, logger="dms_parser")
+    caplog.set_level(logging.DEBUG, logger="dmsroute")
 
     result = build_proteingym_dataset(
         input_path,
@@ -218,7 +218,7 @@ def test_builder_logs_aggregate_counts_without_wt_or_row_flood(
     builder_records = [
         record
         for record in caplog.records
-        if record.name == "dms_parser.builders"
+        if record.name == "dmsroute.builders"
     ]
     assert len(result) == row_count
     assert (
@@ -236,7 +236,7 @@ def test_builder_logs_synthetic_wt_addition_and_existing_wt(
 ) -> None:
     input_path = tmp_path / "scores.csv"
     pd.DataFrame({"mutant": ["M1A"], "DMS_score": [0.5]}).to_csv(input_path, index=False)
-    caplog.set_level(logging.DEBUG, logger="dms_parser.builders")
+    caplog.set_level(logging.DEBUG, logger="dmsroute.builders")
 
     build_proteingym_dataset(
         input_path,
@@ -279,7 +279,7 @@ def test_download_logging_redacts_url_secrets_and_preserves_file(
         "get",
         lambda *args, **kwargs: StreamingResponse(),
     )
-    caplog.set_level(logging.DEBUG, logger="dms_parser.acquisition.io")
+    caplog.set_level(logging.DEBUG, logger="dmsroute.acquisition.io")
 
     result = io_module.download_file(url, output_path)
 
@@ -310,7 +310,7 @@ def test_download_exception_type_and_message_are_unchanged(
         raise cause
 
     monkeypatch.setattr(io_module.requests, "get", failed_request)
-    caplog.set_level(logging.DEBUG, logger="dms_parser.acquisition.io")
+    caplog.set_level(logging.DEBUG, logger="dmsroute.acquisition.io")
 
     with pytest.raises(DownloadError) as exc_info:
         io_module.download_file(url, tmp_path / "data.csv")

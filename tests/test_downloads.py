@@ -13,13 +13,13 @@ import pandas as pd
 import pytest
 import requests
 
-import dms_parser
-import dms_parser.downloads as downloads_module
-import dms_parser.acquisition.fetch as fetch_module
-import dms_parser.pipeline as pipeline_module
-import dms_parser.sources._mavedb_snapshot_dataset as snapshot_dataset_module
-import dms_parser.sources.mavedb_snapshot_tables as snapshot_tables_module
-from dms_parser import (
+import dmsroute
+import dmsroute.downloads as downloads_module
+import dmsroute.acquisition.fetch as fetch_module
+import dmsroute.pipeline as pipeline_module
+import dmsroute.sources._mavedb_snapshot_dataset as snapshot_dataset_module
+import dmsroute.sources.mavedb_snapshot_tables as snapshot_tables_module
+from dmsroute import (
     DatasetBatchDownloadEntry,
     DatasetBatchDownloadResult,
     DatasetDownloadResult,
@@ -29,7 +29,7 @@ from dms_parser import (
     download_and_standardize_datasets,
     get_proteingym_resource,
 )
-from dms_parser.core.exceptions import (
+from dmsroute.core.exceptions import (
     DatasetNotFoundError,
     DownloadError,
     InvalidDatasetError,
@@ -38,8 +38,8 @@ from dms_parser.core.exceptions import (
     SourceConfigurationError,
     WildTypeConflictError,
 )
-from dms_parser.sources.mavedb_snapshots import MAVEDB_ZENODO_CONCEPT_DOI
-from dms_parser.sources.proteingym_catalog import (
+from dmsroute.sources.mavedb_snapshots import MAVEDB_ZENODO_CONCEPT_DOI
+from dmsroute.sources.proteingym_catalog import (
     PROTEINGYM_SUBSTITUTIONS_CACHE_ID,
 )
 
@@ -368,7 +368,7 @@ def test_download_api_is_public() -> None:
     )
 
     for name in public_names:
-        public_value = getattr(dms_parser, name)
+        public_value = getattr(dmsroute, name)
         assert public_value is getattr(downloads_module, name)
         assert public_value is getattr(pipeline_module, name)
 

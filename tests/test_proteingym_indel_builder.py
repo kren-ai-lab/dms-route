@@ -5,21 +5,21 @@ from inspect import signature
 import pandas as pd
 import pytest
 
-import dms_parser
-import dms_parser.builders as builders_module
-from dms_parser.core._wildtype import get_wt_resolution
-from dms_parser.builders import (
+import dmsroute
+import dmsroute.builders as builders_module
+from dmsroute.core._wildtype import get_wt_resolution
+from dmsroute.builders import (
     build_mavedb_dataset,
     build_proteingym_dataset,
     build_proteingym_indel_dataset,
 )
-from dms_parser.core.exceptions import (
+from dmsroute.core.exceptions import (
     InvalidDatasetError,
     MissingWildTypeError,
     SequenceValidationError,
     WildTypeConflictError,
 )
-from dms_parser.sources.proteingym_resources import get_proteingym_resource
+from dmsroute.sources.proteingym_resources import get_proteingym_resource
 
 
 def _write_indel_table(tmp_path, table: pd.DataFrame, name: str = "indels.csv"):
@@ -29,7 +29,7 @@ def _write_indel_table(tmp_path, table: pd.DataFrame, name: str = "indels.csv"):
 
 
 def test_proteingym_indel_builder_is_public_with_expected_signature():
-    assert dms_parser.build_proteingym_indel_dataset is (
+    assert dmsroute.build_proteingym_indel_dataset is (
         build_proteingym_indel_dataset
     )
     parameters = signature(build_proteingym_indel_dataset).parameters
@@ -93,7 +93,7 @@ def test_proteingym_indel_builder_uses_authoritative_sequences(tmp_path):
     ].tolist()
     assert result["mutant"].isna().all()
     assert "score_binary_like" not in result.columns
-    resolution = result.attrs["dms_parser_wt_resolution"]
+    resolution = result.attrs["dmsroute_wt_resolution"]
     assert resolution["sequence"] == "MAAAA"
     assert resolution["sequence_provenance"] == "proteingym_target_seq"
 
@@ -367,7 +367,7 @@ def test_proteingym_indel_builder_uses_fallback_without_target_evidence(tmp_path
 
     assert result["wt_sequence"].tolist() == ["MKT"]
     assert (
-        result.attrs["dms_parser_wt_resolution"]["sequence_provenance"]
+        result.attrs["dmsroute_wt_resolution"]["sequence_provenance"]
         == "user_fallback"
     )
 

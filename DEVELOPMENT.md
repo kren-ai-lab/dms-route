@@ -1,6 +1,6 @@
 # Development Guide
 
-This project is the `dms-parser` Python package and command-line interface for acquiring, parsing, validating, harmonizing, and standardizing DMS datasets from MaveDB and ProteinGym.
+This project is the `DMSRoute` Python package and command-line interface for acquiring, parsing, validating, harmonizing, and standardizing DMS datasets from MaveDB and ProteinGym.
 
 ## Requirements
 
@@ -28,12 +28,12 @@ This uses the repository's actual editable-install workflow and dev extra.
 
 ## Repository architecture
 
-The package lives directly at the repository root as `dms_parser/`.
+The package lives directly at the repository root as `dmsroute/`.
 
 - root-level orchestration modules: `builders.py`, `catalog.py`, `config.py`, `downloads.py`, `pipeline.py`, and `cli.py`
-- `dms_parser/core/`: parsing, validation, transformation, and domain primitives
-- `dms_parser/acquisition/`: cache, fetch, and I/O infrastructure
-- `dms_parser/sources/`: MaveDB and ProteinGym source-specific adapters and catalogs
+- `dmsroute/core/`: parsing, validation, transformation, and domain primitives
+- `dmsroute/acquisition/`: cache, fetch, and I/O infrastructure
+- `dmsroute/sources/`: MaveDB and ProteinGym source-specific adapters and catalogs
 - `tests/`: automated regression and behavior tests
 - `examples/`: usage examples and notebooks
 
@@ -66,25 +66,25 @@ python -m pip check
 Run compile checking:
 
 ```bash
-python -m compileall -q dms_parser tests examples
+python -m compileall -q dmsroute tests examples
 ```
 
 ## CLI smoke testing
 
-The supported public CLI entry point is `dms-parser`.
+The supported public CLI entry point is `dmsroute`.
 
 Use the following commands:
 
 ```bash
-dms-parser --help
-dms-parser download --help
-dms-parser download-many --help
-dms-parser run --help
-dms-parser snapshot --help
-dms-parser cache --help
+dmsroute --help
+dmsroute download --help
+dmsroute download-many --help
+dmsroute run --help
+dmsroute snapshot --help
+dmsroute cache --help
 ```
 
-`python -m dms_parser.cli` is intentionally not a supported public invocation and is not documented as such.
+`python -m dmsroute.cli` is intentionally not a supported public invocation and is not documented as such.
 
 ## External access policy
 
@@ -104,20 +104,20 @@ python -m twine check --strict dist/*
 Optional clean-install validation:
 
 ```bash
-python -m venv /tmp/dms-parser-check
+python -m venv /tmp/dmsroute-check
 # activate the temporary environment and install the built wheel
-python -m pip install dist/dms_parser-0.1.0-py3-none-any.whl
+python -m pip install dist/dmsroute-0.1.0-py3-none-any.whl
 python -m pip check
-dms-parser --help
+dmsroute --help
 ```
 
 Do not add or require `uv.lock` for normal development.
 
 ## Contribution and change principles
 
-- Source adapters should keep source-specific behavior inside `dms_parser/sources/`.
-- Generic acquisition logic belongs in `dms_parser/acquisition/`.
-- Generic parsing, validation, and domain logic belongs in `dms_parser/core/`.
+- Source adapters should keep source-specific behavior inside `dmsroute/sources/`.
+- Generic acquisition logic belongs in `dmsroute/acquisition/`.
+- Generic parsing, validation, and domain logic belongs in `dmsroute/core/`.
 - Orchestration remains in the root-level facade modules.
 - Changes to standardized data contracts require explicit tests.
 - Avoid unrelated cleanup while implementing a requested change.

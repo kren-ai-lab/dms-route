@@ -3,8 +3,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from dms_parser.core.exceptions import InvalidDatasetError, MissingWildTypeError, SequenceValidationError
-from dms_parser.core.validation import (
+from dmsroute.core.exceptions import InvalidDatasetError, MissingWildTypeError, SequenceValidationError
+from dmsroute.core.validation import (
     count_invalid_sequences,
     has_wildtype_row,
     validate_column_non_empty,

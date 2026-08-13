@@ -1,4 +1,4 @@
-# Complete reference for `dms-parser run --config`.
+# Complete reference for `dmsroute run --config`.
 # Active values form a valid, conservative configuration. Paths are resolved
 # from the working directory, and optional score transformations are disabled.
 
@@ -18,7 +18,7 @@ proteingym:
     strict_variant_parsing: false
     # null selects the delimiter from the file suffix.
     sep: null
-    # The builder accepts this option, but `dms-parser run` passes an already
+    # The builder accepts this option, but `dmsroute run` passes an already
     # resolved WT sequence, so this workflow does not consult the FASTA path.
     wt_fasta_path: null
 
@@ -66,7 +66,7 @@ mavedb:
   default_build_kwargs:
     # null selects the delimiter from the file suffix.
     sep: null
-    # The builder accepts this option, but `dms-parser run` passes an already
+    # The builder accepts this option, but `dmsroute run` passes an already
     # resolved WT sequence, so this workflow does not consult the FASTA path.
     wt_fasta_path: null
 

@@ -9,10 +9,10 @@ from typing import Any
 import pandas as pd
 import pytest
 
-import dms_parser.downloads as downloads_module
-import dms_parser.pipeline as pipeline_module
-from dms_parser import PipelineResult, run_pipeline
-from dms_parser.core.exceptions import InvalidPipelineOptionError
+import dmsroute.downloads as downloads_module
+import dmsroute.pipeline as pipeline_module
+from dmsroute import PipelineResult, run_pipeline
+from dmsroute.core.exceptions import InvalidPipelineOptionError
 from tests._factories import standardized_table
 
 
@@ -793,7 +793,7 @@ def test_pipeline_logs_no_full_wt_sequence_or_url_secrets(
         lambda url, output_path, overwrite=False: Path(output_path),
     )
     monkeypatch.setattr(pipeline_module, "read_table", lambda path: metadata)
-    caplog.set_level(logging.DEBUG, logger="dms_parser.pipeline")
+    caplog.set_level(logging.DEBUG, logger="dmsroute.pipeline")
 
     summary = pipeline_module.process_proteingym(
         {

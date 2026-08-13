@@ -6,12 +6,12 @@ from typing import Any
 import pandas as pd
 import pytest
 
-import dms_parser.sources as sources_module
-import dms_parser.sources._dataset_adapter as adapter_module
-import dms_parser.sources.mavedb as mavedb_module
-import dms_parser.sources.proteingym as proteingym_module
-from dms_parser.acquisition.cache import FilesystemCache
-from dms_parser.core.exceptions import InvalidCacheEntryError
+import dmsroute.sources as sources_module
+import dmsroute.sources._dataset_adapter as adapter_module
+import dmsroute.sources.mavedb as mavedb_module
+import dmsroute.sources.proteingym as proteingym_module
+from dmsroute.acquisition.cache import FilesystemCache
+from dmsroute.core.exceptions import InvalidCacheEntryError
 
 SOURCE_ADAPTERS = (
     (

@@ -4,13 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dms_parser.core.constants import NEUTRAL_LABEL
-from dms_parser.core.exceptions import (
+from dmsroute.core.constants import NEUTRAL_LABEL
+from dmsroute.core.exceptions import (
     InvalidDatasetError,
     MissingWildTypeError,
     WildTypeConflictError,
 )
-from dms_parser.core.transforms import (
+from dmsroute.core.transforms import (
     add_minmax,
     add_pseudo_binary_label,
     add_wt_relative_score,

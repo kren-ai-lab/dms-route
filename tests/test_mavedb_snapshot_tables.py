@@ -13,21 +13,21 @@ from typing import Any
 
 import pytest
 
-import dms_parser
-import dms_parser.sources as sources_module
-import dms_parser.sources.mavedb_snapshot_tables as tables_module
-from dms_parser import FilesystemCache
-from dms_parser.core.exceptions import (
+import dmsroute
+import dmsroute.sources as sources_module
+import dmsroute.sources.mavedb_snapshot_tables as tables_module
+from dmsroute import FilesystemCache
+from dmsroute.core.exceptions import (
     MaveDBSnapshotTableError,
     SnapshotDatasetNotFoundError,
     SupersededSnapshotDatasetError,
 )
-from dms_parser.sources.mavedb_snapshots import (
+from dmsroute.sources.mavedb_snapshots import (
     MAVEDB_ZENODO_CONCEPT_DOI,
     MaveDBSnapshot,
     MaveDBSnapshotRecord,
 )
-from dms_parser.sources.mavedb_snapshot_tables import (
+from dmsroute.sources.mavedb_snapshot_tables import (
     MaveDBSnapshotTable,
     MaveDBSnapshotTableExtractionResult,
     extract_mavedb_snapshot_tables,
@@ -257,8 +257,8 @@ def test_public_exports_and_immutable_result_records(tmp_path: Path) -> None:
         "extract_mavedb_snapshot_tables",
     )
     for name in names:
-        assert getattr(dms_parser, name) is getattr(sources_module, name)
-        assert getattr(dms_parser, name) is getattr(tables_module, name)
+        assert getattr(dmsroute, name) is getattr(sources_module, name)
+        assert getattr(dmsroute, name) is getattr(tables_module, name)
 
     table = MaveDBSnapshotTable(
         dataset_id=CURRENT_ONE,

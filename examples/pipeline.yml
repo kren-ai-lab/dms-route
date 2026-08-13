@@ -1,4 +1,4 @@
-# Minimal configuration for `dms-parser run --config examples/pipeline.yml`.
+# Minimal configuration for `dmsroute run --config examples/pipeline.yml`.
 # See `config.reference.yml` for advanced overrides.
 
 proteingym:

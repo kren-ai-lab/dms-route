@@ -8,9 +8,9 @@ import pandas as pd
 import pytest
 import yaml
 
-import dms_parser.pipeline as pipeline_module
-from dms_parser.config import validate_source_dataset_id
-from dms_parser import (
+import dmsroute.pipeline as pipeline_module
+from dmsroute.config import validate_source_dataset_id
+from dmsroute import (
     PROTEINGYM_RESOURCES,
     SourceConfigurationError,
     UnknownSourceResourceError,
@@ -20,8 +20,8 @@ from dms_parser import (
     run_pipeline,
     validate_pipeline_config,
 )
-from dms_parser.sources.mavedb_catalog import MAVEDB_API_URL, MaveDBCatalog
-from dms_parser.sources.proteingym_catalog import (
+from dmsroute.sources.mavedb_catalog import MAVEDB_API_URL, MaveDBCatalog
+from dmsroute.sources.proteingym_catalog import (
     PROTEINGYM_INDELS_URL,
     PROTEINGYM_SUBSTITUTIONS_URL,
     ProteinGymCatalog,

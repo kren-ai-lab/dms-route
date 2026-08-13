@@ -7,16 +7,16 @@ from typing import Any
 import pandas as pd
 import pytest
 
-import dms_parser.downloads as downloads_module
-import dms_parser.acquisition.fetch as fetch_module
-import dms_parser.acquisition.io as io_module
-from dms_parser import (
+import dmsroute.downloads as downloads_module
+import dmsroute.acquisition.fetch as fetch_module
+import dmsroute.acquisition.io as io_module
+from dmsroute import (
     FilesystemCache,
     download_and_standardize_dataset,
     download_and_standardize_datasets,
     get_proteingym_resource,
 )
-from dms_parser.core.exceptions import InvalidPipelineOptionError
+from dmsroute.core.exceptions import InvalidPipelineOptionError
 
 
 def _install_offline_resource(

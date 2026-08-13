@@ -8,16 +8,16 @@ from typing import Any
 
 import pytest
 
-import dms_parser
-import dms_parser.sources as sources_module
-import dms_parser.sources.mavedb_bulk_catalog as bulk_module
-from dms_parser import (
+import dmsroute
+import dmsroute.sources as sources_module
+import dmsroute.sources.mavedb_bulk_catalog as bulk_module
+from dmsroute import (
     MaveDBBulkCatalog,
     MaveDBDiscoveredExperiment,
     MaveDBDiscoveredScoreSet,
     MaveDBDiscoveryResult,
 )
-from dms_parser.core.exceptions import CatalogError, InvalidCatalogQueryError
+from dmsroute.core.exceptions import CatalogError, InvalidCatalogQueryError
 
 
 def _target(
@@ -610,8 +610,8 @@ def test_public_bulk_catalog_exports_are_identical() -> None:
         "MaveDBDiscoveryResult",
     )
     for name in names:
-        assert getattr(dms_parser, name) is getattr(sources_module, name)
-        assert getattr(dms_parser, name) is getattr(bulk_module, name)
+        assert getattr(dmsroute, name) is getattr(sources_module, name)
+        assert getattr(dmsroute, name) is getattr(bulk_module, name)
 
     assert MaveDBDiscoveredExperiment is bulk_module.MaveDBDiscoveredExperiment
     assert MaveDBDiscoveredScoreSet is bulk_module.MaveDBDiscoveredScoreSet

@@ -8,11 +8,11 @@ from typing import Any
 
 import pytest
 
-import dms_parser.acquisition.cache as cache_module
-import dms_parser.acquisition.cache_inventory as inventory_module
-import dms_parser.sources.mavedb_snapshot_tables as table_module
-import dms_parser.sources.mavedb_snapshots as snapshot_module
-from dms_parser import (
+import dmsroute.acquisition.cache as cache_module
+import dmsroute.acquisition.cache_inventory as inventory_module
+import dmsroute.sources.mavedb_snapshot_tables as table_module
+import dmsroute.sources.mavedb_snapshots as snapshot_module
+from dmsroute import (
     CacheInventoryArtifact,
     CacheInventoryEntry,
     CacheInventoryError,

@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from dms_parser.acquisition.cache import CacheManifest, FilesystemCache
-from dms_parser.core.exceptions import (
+from dmsroute.acquisition.cache import CacheManifest, FilesystemCache
+from dmsroute.core.exceptions import (
     CorruptCacheManifestError,
     InvalidCacheEntryError,
 )
@@ -243,7 +243,7 @@ def _fail_manifest_replace(monkeypatch):
             raise OSError("manifest publication failed")
         original_replace(source, destination)
 
-    monkeypatch.setattr("dms_parser.acquisition.cache.os.replace", failing_replace)
+    monkeypatch.setattr("dmsroute.acquisition.cache.os.replace", failing_replace)
 
 
 def _assert_no_abandoned_cache_files(entry_path):

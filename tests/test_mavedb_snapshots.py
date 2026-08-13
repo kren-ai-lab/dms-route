@@ -14,15 +14,15 @@ from typing import Any
 import pytest
 import requests
 
-import dms_parser
-import dms_parser.sources as sources_module
-import dms_parser.sources.mavedb_snapshots as snapshots_module
-from dms_parser import FilesystemCache
-from dms_parser.core.exceptions import (
+import dmsroute
+import dmsroute.sources as sources_module
+import dmsroute.sources.mavedb_snapshots as snapshots_module
+from dmsroute import FilesystemCache
+from dmsroute.core.exceptions import (
     InvalidSnapshotSelectorError,
     MaveDBSnapshotError,
 )
-from dms_parser.sources.mavedb_snapshots import (
+from dmsroute.sources.mavedb_snapshots import (
     MAVEDB_ZENODO_API_URL,
     MAVEDB_ZENODO_CONCEPT_DOI,
     MaveDBSnapshot,
@@ -798,8 +798,8 @@ def test_public_snapshot_exports_are_identical_and_records_are_frozen(
         "resolve_mavedb_snapshot",
     )
     for name in names:
-        assert getattr(dms_parser, name) is getattr(sources_module, name)
-        assert getattr(dms_parser, name) is getattr(snapshots_module, name)
+        assert getattr(dmsroute, name) is getattr(sources_module, name)
+        assert getattr(dmsroute, name) is getattr(snapshots_module, name)
 
     record = MaveDBSnapshotRecord(
         record_id="1",

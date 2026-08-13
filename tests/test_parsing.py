@@ -3,15 +3,15 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import dms_parser
-from dms_parser.core.exceptions import (
+import dmsroute
+from dmsroute.core.exceptions import (
     InvalidHGVSVariantError,
     InvalidVariantError,
     MutationApplicationError,
     SequenceValidationError,
     UnsupportedVariantError,
 )
-from dms_parser.core.parsing import (
+from dmsroute.core.parsing import (
     apply_mutations,
     count_mutations,
     explode_mutations,
@@ -29,7 +29,7 @@ from dms_parser.core.parsing import (
     translate_dna,
     variant_to_sequence,
 )
-from dms_parser.core.types import ProteinDeletionEdit, ProteinInsertionEdit
+from dmsroute.core.types import ProteinDeletionEdit, ProteinInsertionEdit
 
 
 def test_is_wildtype_variant_detects_common_tokens():
@@ -144,8 +144,8 @@ def test_hgvs_pro_is_indel():
 
 
 def test_hgvs_pro_is_indel_package_public_import():
-    assert dms_parser.hgvs_pro_is_indel is hgvs_pro_is_indel
-    assert dms_parser.hgvs_pro_is_indel("p.Cys2del") is True
+    assert dmsroute.hgvs_pro_is_indel is hgvs_pro_is_indel
+    assert dmsroute.hgvs_pro_is_indel("p.Cys2del") is True
 
 
 def test_parse_hgvs_pro_single():

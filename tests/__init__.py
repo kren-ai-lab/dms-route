@@ -1,1 +1,1 @@
-"""Test suite for dms_parser."""
+"""Test suite for dmsroute."""

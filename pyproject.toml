@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dms-parser"
+name = "dmsroute"
 version = "0.1.0"
-description = "Internal utilities for downloading, parsing, and transforming DMS datasets from MaveDB and ProteinGym."
+description = "Utilities for acquiring, parsing, validating, harmonizing, and standardizing DMS datasets from MaveDB and ProteinGym."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dms-parser = "dms_parser.cli:main"
+dmsroute = "dmsroute.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -29,4 +29,4 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["dms_parser*"]
+include = ["dmsroute*"]

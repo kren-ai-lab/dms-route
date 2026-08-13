@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-import dms_parser.pipeline as pipeline_module
-from dms_parser import (
+import dmsroute.pipeline as pipeline_module
+from dmsroute import (
     SourceConfigurationError,
     UnknownSourceResourceError,
     UnsupportedSourceResourceError,
@@ -298,7 +298,7 @@ def test_wt_fallbacks_have_one_canonical_yaml_location(tmp_path: Path) -> None:
 
 
 def test_installed_package_sources_do_not_import_examples() -> None:
-    source_root = Path(__file__).parents[1] / "src" / "dms_parser"
+    source_root = Path(__file__).parents[1] / "src" / "dmsroute"
     violations: list[str] = []
 
     for source_path in source_root.rglob("*.py"):

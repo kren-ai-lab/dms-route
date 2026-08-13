@@ -5,11 +5,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-import dms_parser.acquisition.fetch as fetch_module
-import dms_parser.pipeline as pipeline_module
-import dms_parser.sources.mavedb as mavedb_module
-import dms_parser.sources.proteingym as proteingym_module
-from dms_parser import get_proteingym_resource
+import dmsroute.acquisition.fetch as fetch_module
+import dmsroute.pipeline as pipeline_module
+import dmsroute.sources.mavedb as mavedb_module
+import dmsroute.sources.proteingym as proteingym_module
+from dmsroute import get_proteingym_resource
 from tests._factories import standardized_table
 
 

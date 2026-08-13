@@ -7,9 +7,9 @@ import pandas as pd
 import pytest
 import requests
 
-import dms_parser.acquisition.io as io_module
-from dms_parser.core.exceptions import DownloadError, FileFormatError
-from dms_parser.acquisition.io import (
+import dmsroute.acquisition.io as io_module
+from dmsroute.core.exceptions import DownloadError, FileFormatError
+from dmsroute.acquisition.io import (
     download_file,
     ensure_local_copy,
     infer_filename_from_url,
@@ -65,7 +65,7 @@ def test_download_file_publishes_complete_content_atomically(tmp_path, monkeypat
         assert not output_path.exists()
         return response
 
-    monkeypatch.setattr("dms_parser.acquisition.io.requests.get", fake_get)
+    monkeypatch.setattr("dmsroute.acquisition.io.requests.get", fake_get)
 
     result = download_file(
         "https://example.test/data.csv",
@@ -87,7 +87,7 @@ def test_download_file_existing_destination_skips_request(tmp_path, monkeypatch)
     def unexpected_request(*args, **kwargs):
         raise AssertionError("A cache hit must not perform a network request.")
 
-    monkeypatch.setattr("dms_parser.acquisition.io.requests.get", unexpected_request)
+    monkeypatch.setattr("dmsroute.acquisition.io.requests.get", unexpected_request)
 
     assert download_file("https://example.test/data.csv", output_path) == output_path
     assert output_path.read_bytes() == b"existing"
@@ -101,7 +101,7 @@ def test_failed_new_download_leaves_no_final_or_temporary_file(
     output_path = tmp_path / "data.csv"
     error = requests.HTTPError("server error")
     monkeypatch.setattr(
-        "dms_parser.acquisition.io.requests.get",
+        "dmsroute.acquisition.io.requests.get",
         lambda *args, **kwargs: FakeResponse([], request_error=error),
     )
 
@@ -117,7 +117,7 @@ def test_interrupted_stream_leaves_no_partial_final_file(tmp_path, monkeypatch):
     output_path = tmp_path / "data.csv"
     error = requests.ConnectionError("stream interrupted")
     monkeypatch.setattr(
-        "dms_parser.acquisition.io.requests.get",
+        "dmsroute.acquisition.io.requests.get",
         lambda *args, **kwargs: FakeResponse(
             [b"partial"],
             stream_error=error,
@@ -137,7 +137,7 @@ def test_failed_overwrite_preserves_previous_file(tmp_path, monkeypatch):
     output_path.write_bytes(b"previous")
     error = requests.ConnectionError("stream interrupted")
     monkeypatch.setattr(
-        "dms_parser.acquisition.io.requests.get",
+        "dmsroute.acquisition.io.requests.get",
         lambda *args, **kwargs: FakeResponse(
             [b"partial replacement"],
             stream_error=error,
@@ -159,7 +159,7 @@ def test_successful_overwrite_replaces_previous_file(tmp_path, monkeypatch):
     output_path = tmp_path / "data.csv"
     output_path.write_bytes(b"previous")
     monkeypatch.setattr(
-        "dms_parser.acquisition.io.requests.get",
+        "dmsroute.acquisition.io.requests.get",
         lambda *args, **kwargs: FakeResponse([b"replacement"]),
     )
 
@@ -178,11 +178,11 @@ def test_download_filesystem_failure_raises_download_error(tmp_path, monkeypatch
     output_path = tmp_path / "data.csv"
     error = PermissionError("cannot publish")
     monkeypatch.setattr(
-        "dms_parser.acquisition.io.requests.get",
+        "dmsroute.acquisition.io.requests.get",
         lambda *args, **kwargs: FakeResponse([b"content"]),
     )
     monkeypatch.setattr(
-        "dms_parser.acquisition.io.os.replace",
+        "dmsroute.acquisition.io.os.replace",
         lambda *args, **kwargs: (_ for _ in ()).throw(error),
     )
 
@@ -319,7 +319,7 @@ def test_dataset_bundle_overwrite_replaces_targets_and_preserves_unrelated(
         assert not content.endswith(b"\n\n")
         assert b"\r\n" not in content
     assert b"caf\xc3\xa9" in paths[0].read_bytes()
-    assert list(output_dir.glob(".dms-parser-bundle-*")) == []
+    assert list(output_dir.glob(".dmsroute-bundle-*")) == []
 
 
 @pytest.mark.parametrize(
@@ -364,7 +364,7 @@ def test_dataset_bundle_publication_failure_restores_all_previous_targets(
     assert failure_injected is True
     assert {path: path.read_bytes() for path in originals} == originals
     assert unrelated.read_text(encoding="utf-8") == "untouched"
-    assert list(output_dir.glob(".dms-parser-bundle-*")) == []
+    assert list(output_dir.glob(".dmsroute-bundle-*")) == []
 
 
 def test_failed_new_bundle_removes_earlier_publications(
@@ -397,7 +397,7 @@ def test_failed_new_bundle_removes_earlier_publications(
         not (output_dir / name).exists()
         for name in ("standardized.csv", "summary.csv", "summary.json")
     )
-    assert list(output_dir.glob(".dms-parser-bundle-*")) == []
+    assert list(output_dir.glob(".dmsroute-bundle-*")) == []
 
 
 def test_dataset_bundle_json_rejects_nan_before_publication(
@@ -419,7 +419,7 @@ def test_dataset_bundle_json_rejects_nan_before_publication(
         not (output_dir / name).exists()
         for name in ("standardized.csv", "summary.csv", "summary.json")
     )
-    assert list(output_dir.glob(".dms-parser-bundle-*")) == []
+    assert list(output_dir.glob(".dmsroute-bundle-*")) == []
 
 
 def _aggregate_records() -> list[dict[str, object]]:
@@ -506,7 +506,7 @@ def test_download_summary_publication_contract_and_overwrite(
         assert not content.endswith(b"\n\n")
         assert b"\r\n" not in content
     assert unrelated.read_text(encoding="utf-8") == "preserve"
-    assert list(output_dir.glob(".dms-parser-download-summary-*")) == []
+    assert list(output_dir.glob(".dmsroute-download-summary-*")) == []
 
 
 @pytest.mark.parametrize(
@@ -547,7 +547,7 @@ def test_download_summary_failure_restores_previous_targets(
 
     assert failure_injected is True
     assert {path: path.read_bytes() for path in originals} == originals
-    assert list(output_dir.glob(".dms-parser-download-summary-*")) == []
+    assert list(output_dir.glob(".dmsroute-download-summary-*")) == []
 
 
 def test_new_download_summary_failure_removes_earlier_publication(
@@ -577,7 +577,7 @@ def test_new_download_summary_failure_removes_earlier_publication(
     assert failure_injected is True
     assert not (output_dir / "download-summary.csv").exists()
     assert not (output_dir / "download-summary.json").exists()
-    assert list(output_dir.glob(".dms-parser-download-summary-*")) == []
+    assert list(output_dir.glob(".dmsroute-download-summary-*")) == []
 
 
 def test_download_summary_rejects_nan_before_publication(tmp_path: Path) -> None:

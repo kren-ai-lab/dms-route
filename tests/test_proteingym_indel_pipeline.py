@@ -6,8 +6,8 @@ from typing import Any
 import pandas as pd
 import pytest
 
-import dms_parser.pipeline as pipeline_module
-from dms_parser import get_proteingym_resource
+import dmsroute.pipeline as pipeline_module
+from dmsroute import get_proteingym_resource
 from tests._factories import standardized_table
 
 

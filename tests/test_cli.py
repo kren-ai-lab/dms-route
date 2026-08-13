@@ -11,8 +11,8 @@ import pytest
 import requests
 from typer.testing import CliRunner
 
-import dms_parser.cli as cli_module
-from dms_parser import (
+import dmsroute.cli as cli_module
+from dmsroute import (
     DatasetBatchDownloadEntry,
     DatasetBatchDownloadResult,
     DatasetDownloadResult,
@@ -27,7 +27,7 @@ from dms_parser import (
     MaveDBSnapshotTableExtractionResult,
     PipelineResult,
 )
-from dms_parser.core.exceptions import (
+from dmsroute.core.exceptions import (
     CacheInventoryError,
     CatalogError,
     DatasetNotFoundError,
@@ -285,7 +285,7 @@ def test_main_argv_compatibility_wrapper(
 
 
 def test_public_typer_app_disables_completion_options() -> None:
-    assert cli_module.app.info.name == "dms-parser"
+    assert cli_module.app.info.name == "dmsroute"
     assert cli_module.snapshot_app.info.name == "snapshot"
 
     result = RUNNER.invoke(cli_module.app, ["--help"])
@@ -599,7 +599,7 @@ def test_configuration_error_returns_one_without_running_pipeline(
     monkeypatch.setattr(cli_module, "load_pipeline_config", invalid_config)
     monkeypatch.setattr(cli_module, "run_pipeline", unexpected_pipeline)
     monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
-    caplog.set_level(logging.ERROR, logger="dms_parser.cli")
+    caplog.set_level(logging.ERROR, logger="dmsroute.cli")
 
     exit_code = cli_module.main(["run", "--config", "invalid.yml"])
 
@@ -663,7 +663,7 @@ def test_default_proteingym_cache_root_is_lazy_and_forwarded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cache_root = tmp_path / "home" / ".cache" / "dms-parser"
+    cache_root = tmp_path / "home" / ".cache" / "dmsroute"
     calls: dict[str, Any] = {}
     monkeypatch.setattr(cli_module, "_default_cache_root", lambda: cache_root)
 
@@ -928,7 +928,7 @@ def test_output_creates_parents_overwrites_utf8_and_suppresses_stdout(
     output_path = tmp_path / "nested" / "catalog.json"
     monkeypatch.setattr(cli_module, "list_datasets", lambda *args, **kwargs: [record])
     monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
-    caplog.set_level(logging.INFO, logger="dms_parser.cli")
+    caplog.set_level(logging.INFO, logger="dmsroute.cli")
     arguments = [
         "list",
         "--source",
@@ -2121,7 +2121,7 @@ def test_download_forwards_defaults_and_uses_default_cache(
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    cache_root = tmp_path / "home" / ".cache" / "dms-parser"
+    cache_root = tmp_path / "home" / ".cache" / "dmsroute"
     output_dir = tmp_path / "output"
     calls: dict[str, Any] = {}
     monkeypatch.setattr(cli_module, "_default_cache_root", lambda: cache_root)
@@ -2139,7 +2139,7 @@ def test_download_forwards_defaults_and_uses_default_cache(
         ),
     )
     monkeypatch.setattr(cli_module.logging, "basicConfig", lambda **kwargs: None)
-    caplog.set_level(logging.INFO, logger="dms_parser.cli")
+    caplog.set_level(logging.INFO, logger="dmsroute.cli")
 
     assert cli_module.main(
         [
@@ -2330,7 +2330,7 @@ def test_download_snapshot_missing_cache_does_not_fetch_implicitly(
         assert kwargs["snapshot_record_id"] == "20840937"
         raise MaveDBSnapshotError(
             "MaveDB snapshot 20840937 is not cached; run "
-            "'dms-parser snapshot fetch --record 20840937' first."
+            "'dmsroute snapshot fetch --record 20840937' first."
         )
 
     monkeypatch.setattr(
@@ -2837,7 +2837,7 @@ def test_download_many_forwards_defaults_order_and_default_cache(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     output_dir = tmp_path / "output"
-    cache_root = tmp_path / "home" / ".cache" / "dms-parser"
+    cache_root = tmp_path / "home" / ".cache" / "dmsroute"
     calls: dict[str, Any] = {}
     monkeypatch.setattr(cli_module, "_default_cache_root", lambda: cache_root)
 
@@ -3161,7 +3161,7 @@ def test_pyproject_registers_cli_entry_point() -> None:
         if line.strip() and not line.lstrip().startswith("#")
     ]
 
-    assert entries == ['dms-parser = "dms_parser.cli:main"']
+    assert entries == ['dmsroute = "dmsroute.cli:main"']
 
 
 def test_pyproject_declares_cli_runtime_dependencies() -> None:
@@ -3207,7 +3207,7 @@ def test_cache_help_performs_no_inventory(
     result = RUNNER.invoke(cli_module.app, ["cache", "--help"])
 
     assert result.exit_code == 0
-    assert "Inspect artifacts in the local DMS Parser cache" in result.stdout
+    assert "Inspect artifacts in the local DMSRoute cache" in result.stdout
     assert "--verify" not in result.stdout
     assert "--refresh" not in result.stdout
     assert "--output" not in result.stdout
@@ -3404,7 +3404,7 @@ def test_cache_expands_explicit_root_and_forwards_exact_filters(
             source=source,
             dataset_id=dataset_id,
         )
-        from dms_parser import CacheInventoryResult
+        from dmsroute import CacheInventoryResult
 
         return CacheInventoryResult(entries=(), issues=())
 

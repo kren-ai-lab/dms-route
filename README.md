@@ -1,6 +1,6 @@
-# dms-parser
+# DMSRoute
 
-`dms-parser` is a Python package and command-line interface for obtaining and
+`DMSRoute` is a Python package and command-line interface for obtaining and
 standardizing published Deep Mutational Scanning (DMS) datasets from
 ProteinGym and MaveDB.
 
@@ -11,7 +11,7 @@ and pseudo-binary labels are optional.
 
 ## Installation
 
-`dms-parser` requires Python 3.10 or newer.
+`dmsroute` requires Python 3.10 or newer.
 
 ```bash
 git clone https://github.com/kren-ai-lab/parsing_dms_data.git
@@ -22,7 +22,7 @@ python -m pip install -e .
 Confirm that the CLI is available:
 
 ```bash
-dms-parser --help
+dmsroute --help
 ```
 
 For development, install the test dependency as well:
@@ -36,11 +36,11 @@ python -m pip install -e ".[dev]"
 Inspect a MaveDB score set and produce a standardized dataset:
 
 ```bash
-dms-parser metadata \
+dmsroute metadata \
     --source mavedb \
     --dataset-id urn:mavedb:00000001-a-4
 
-dms-parser download \
+dmsroute download \
     --source mavedb \
     --dataset-id urn:mavedb:00000001-a-4 \
     --output-dir datasets/ube2i
@@ -58,7 +58,7 @@ datasets/ube2i/
 The equivalent ProteinGym workflow uses its canonical `DMS_id`:
 
 ```bash
-dms-parser download \
+dmsroute download \
     --source proteingym \
     --variant-type indels \
     --dataset-id ASSAY_DMS_ID \
@@ -89,7 +89,7 @@ and single-residue insertions between adjacent anchors
 remain unsupported.
 
 ProteinGym's `dms_indels` resource treats `mutated_sequence` as the
-authoritative observed sequence. DMS Parser preserves it without inferring an
+authoritative observed sequence. DMSRoute preserves it without inferring an
 HGVS expression or unique indel coordinates.
 
 ## Command-line workflows
@@ -99,14 +99,14 @@ HGVS expression or unique indel coordinates.
 Use `list` to query a source catalog:
 
 ```bash
-dms-parser list --source proteingym --query BRCA1 --limit 10
-dms-parser list --source mavedb --query BRCA1 --limit 10
+dmsroute list --source proteingym --query BRCA1 --limit 10
+dmsroute list --source mavedb --query BRCA1 --limit 10
 ```
 
 Use `metadata` when the dataset identifier is already known:
 
 ```bash
-dms-parser metadata \
+dmsroute metadata \
     --source proteingym \
     --dataset-id BRCA1_HUMAN_Findlay_2018
 ```
@@ -114,7 +114,7 @@ dms-parser metadata \
 Both commands support text output and JSON output:
 
 ```bash
-dms-parser list \
+dmsroute list \
     --source proteingym \
     --variant-type substitutions \
     --format json \
@@ -130,13 +130,13 @@ reference files stored in the local cache. `--variant-type`, `--cache-dir`, and
 `download` obtains and standardizes one dataset without a YAML configuration:
 
 ```bash
-dms-parser download \
+dmsroute download \
     --source mavedb \
     --dataset-id urn:mavedb:00000001-a-4 \
     --output-dir datasets/ube2i
 ```
 
-Source data are cached under `~/.cache/dms-parser` by default. Use
+Source data are cached under `~/.cache/dmsroute` by default. Use
 `--cache-dir` to select another cache root, `--refresh` to reacquire source
 artifacts, and `--overwrite` to replace an existing three-file output bundle.
 
@@ -148,7 +148,7 @@ Rows that cannot be standardized remain in the output with their `status` and
 Repeat `--dataset-id` to process an ordered batch from one source:
 
 ```bash
-dms-parser download-many \
+dmsroute download-many \
     --source proteingym \
     --dataset-id BRCA1_HUMAN_Findlay_2018 \
     --dataset-id PTEN_HUMAN_Mighell_2018 \
@@ -164,7 +164,7 @@ urn:mavedb:00000080-a-2
 ```
 
 ```bash
-dms-parser download-many \
+dmsroute download-many \
     --source mavedb \
     --dataset-id-file mavedb_ids.txt \
     --output-dir datasets
@@ -202,7 +202,7 @@ Source scores are copied to `score_raw` without transformation. WT-relative
 scores and pseudo-binary labels must be requested explicitly:
 
 ```bash
-dms-parser download \
+dmsroute download \
     --source proteingym \
     --dataset-id BLAT_ECOLX_Jacquier_2013 \
     --output-dir datasets/blat-difference \
@@ -223,7 +223,7 @@ ambiguity.
 Pseudo-binary labels are calculated from a requested relative score:
 
 ```bash
-dms-parser download \
+dmsroute download \
     --source proteingym \
     --dataset-id BLAT_ECOLX_Jacquier_2013 \
     --output-dir datasets/blat-labelled \
@@ -233,8 +233,8 @@ dms-parser download \
     --delta 0.1
 ```
 
-Run `dms-parser download --help` or
-`dms-parser download-many --help` for the complete set of WT, direction, column,
+Run `dmsroute download --help` or
+`dmsroute download-many --help` for the complete set of WT, direction, column,
 and output options.
 
 ### Use MaveDB bulk snapshots
@@ -245,20 +245,20 @@ MaveDB bulk snapshots are versioned Zenodo records. The archive can be about
 Fetch either the latest available snapshot or a fixed record:
 
 ```bash
-dms-parser snapshot fetch --latest
-dms-parser snapshot fetch --record 20840937
+dmsroute snapshot fetch --latest
+dmsroute snapshot fetch --record 20840937
 ```
 
 Search score-set metadata in a managed snapshot:
 
 ```bash
-dms-parser discover --snapshot 20840937 --query BRCA1
+dmsroute discover --snapshot 20840937 --query BRCA1
 ```
 
 An already extracted `main.json` can be searched directly:
 
 ```bash
-dms-parser discover \
+dmsroute discover \
     --main-json /data/mavedb/main.json \
     --query BRCA1
 ```
@@ -266,7 +266,7 @@ dms-parser discover \
 Extract raw archival score and count tables for selected score sets:
 
 ```bash
-dms-parser snapshot extract \
+dmsroute snapshot extract \
     --record 20840937 \
     --dataset-id urn:mavedb:00000003-a-1
 ```
@@ -275,7 +275,7 @@ To standardize a score set from a snapshot, first fetch the concrete record,
 then select snapshot acquisition:
 
 ```bash
-dms-parser download \
+dmsroute download \
     --source mavedb \
     --dataset-id urn:mavedb:00000001-a-4 \
     --acquisition snapshot \
@@ -293,7 +293,7 @@ standardization workflow. Snapshot acquisition is available for `download` and
 Use a configuration file to process named datasets from either or both sources:
 
 ```bash
-dms-parser run --config examples/pipeline.yml
+dmsroute run --config examples/pipeline.yml
 ```
 
 A minimal configuration has source-specific dataset lists and an optional
@@ -337,10 +337,10 @@ complete YAML contract and supported builder options.
 The cache inventory is read-only:
 
 ```bash
-dms-parser cache
-dms-parser cache --source proteingym
-dms-parser cache --format json
-dms-parser cache --cache-dir ./example-cache
+dmsroute cache
+dmsroute cache --source proteingym
+dmsroute cache --format json
+dmsroute cache --cache-dir ./example-cache
 ```
 
 It reports managed entries and structural problems without downloading,
@@ -396,7 +396,7 @@ WT provenance, and requested transformations.
 ### Build from a local table
 
 ```python
-from dms_parser import build_proteingym_dataset
+from dmsroute import build_proteingym_dataset
 
 dataset = build_proteingym_dataset(
     input_path="experiment.csv",
@@ -415,20 +415,20 @@ variants.
 ```python
 from pathlib import Path
 
-from dms_parser import FilesystemCache, download_and_standardize_dataset
+from dmsroute import FilesystemCache, download_and_standardize_dataset
 
 result = download_and_standardize_dataset(
     "mavedb",
     "urn:mavedb:00000001-a-4",
     output_dir="datasets/ube2i",
-    cache=FilesystemCache(Path.home() / ".cache" / "dms-parser"),
+    cache=FilesystemCache(Path.home() / ".cache" / "dmsroute"),
 )
 
 print(result.dataset_path)
 ```
 
 The package also exports catalog, parsing, transformation, validation,
-snapshot, cache, and configuration APIs through `dms_parser`.
+snapshot, cache, and configuration APIs through `dmsroute`.
 
 ## Examples
 
@@ -444,7 +444,7 @@ The `examples/` directory contains:
 - [`04_transforms_and_pseudo_labels.ipynb`](examples/04_transforms_and_pseudo_labels.ipynb):
   apply score transformations and pseudo-binary labels.
 - [`pipeline.yml`](examples/pipeline.yml): example configuration for
-  `dms-parser run`.
+  `dmsroute run`.
 - [`config.reference.yml`](examples/config.reference.yml): commented reference
   for the YAML configuration.
 

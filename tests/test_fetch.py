@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-import dms_parser.acquisition.fetch as fetch_module
-from dms_parser import fetch_to_cache as public_fetch_to_cache
-from dms_parser.acquisition.cache import FilesystemCache
-from dms_parser.core.exceptions import DownloadError, InvalidCacheEntryError
-from dms_parser.acquisition.fetch import fetch_to_cache
+import dmsroute.acquisition.fetch as fetch_module
+from dmsroute import fetch_to_cache as public_fetch_to_cache
+from dmsroute.acquisition.cache import FilesystemCache
+from dmsroute.core.exceptions import DownloadError, InvalidCacheEntryError
+from dmsroute.acquisition.fetch import fetch_to_cache
 
 
 def test_fetch_to_cache_is_exported_from_package():

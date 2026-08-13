@@ -2,7 +2,7 @@
 
 ## Project scope
 
-`dms-parser` acquires, parses, validates, harmonizes, and standardizes Deep Mutational Scanning (DMS) datasets, with current source integrations for MaveDB and ProteinGym workflows.
+`DMSRoute` acquires, parses, validates, harmonizes, and standardizes Deep Mutational Scanning (DMS) datasets, with current source integrations for MaveDB and ProteinGym workflows.
 
 This project is not a representation, embedding, model-training, or machine-learning library.
 
@@ -18,13 +18,13 @@ This project is not a representation, embedding, model-training, or machine-lear
 
 Preserve the current repository-root package layout:
 
-- `dms_parser/`
+- `dmsroute/`
   - `core/`: parsing, domain, validation, and transformation primitives
   - `acquisition/`: cache, fetch, and I/O infrastructure
   - `sources/`: MaveDB and ProteinGym source-specific integrations
   - root-level orchestration modules: `builders.py`, `catalog.py`, `config.py`, `downloads.py`, `pipeline.py`, and `cli.py`
 
-Do not reintroduce `src/dms_parser/`.
+Do not reintroduce `src/dmsroute/`.
 
 Do not move modules across these boundaries without a concrete architectural reason.
 
@@ -34,13 +34,13 @@ Preserve documented public APIs.
 
 The public console command is:
 
-- `dms-parser`
+- `dmsroute`
 
 The console entry point is:
 
-- `dms-parser = dms_parser.cli:main`
+- `dmsroute = dmsroute.cli:main`
 
-`python -m dms_parser.cli` is intentionally not a supported public execution contract.
+`python -m dmsroute.cli` is intentionally not a supported public execution contract.
 
 Do not add `__main__.py` merely to support that invocation.
 
@@ -87,7 +87,7 @@ For normal code changes, run relevant focused tests first and then the full suit
 
 Before considering a release-affecting change complete, verify as appropriate:
 
-- `python -m compileall -q dms_parser tests examples`
+- `python -m compileall -q dmsroute tests examples`
 - `pytest -q`
 - `python -m pip check`
 - CLI smoke tests

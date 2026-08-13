@@ -7,11 +7,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import dms_parser.builders as builders_module
-from dms_parser.core._wildtype import resolve_wt_score
-from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
-from dms_parser.core.constants import NEUTRAL_LABEL
-from dms_parser.core.exceptions import (
+import dmsroute.builders as builders_module
+from dmsroute.core._wildtype import resolve_wt_score
+from dmsroute.builders import build_mavedb_dataset, build_proteingym_dataset
+from dmsroute.core.constants import NEUTRAL_LABEL
+from dmsroute.core.exceptions import (
     InvalidDatasetError,
     InvalidPipelineOptionError,
     MissingWildTypeError,
@@ -417,7 +417,7 @@ def test_raw_mavedb_build_preserves_ambiguous_observed_wt_scores(
     assert result["score_raw"].tolist() == [1.0, 2.0, 0.5]
     assert result["is_wildtype"].tolist() == [True, True, False]
     assert result["is_synthetic"].tolist() == [False, False, False]
-    resolution = result.attrs["dms_parser_wt_resolution"]
+    resolution = result.attrs["dmsroute_wt_resolution"]
     assert resolution["score"] is None
     assert resolution["score_provenance"] is None
     assert resolution["observed_wildtype_row"] is True
@@ -475,7 +475,7 @@ def test_equal_or_equivalent_observed_wt_scores_still_resolve(
         wt_sequence=wt_sequence,
     )
 
-    resolution = result.attrs["dms_parser_wt_resolution"]
+    resolution = result.attrs["dmsroute_wt_resolution"]
     assert resolution["score"] == 1.0
     assert resolution["score_provenance"] == "observed_wildtype_row"
     assert resolution["score_unavailable_reason"] is None
@@ -525,7 +525,7 @@ def test_scoreless_synthetic_wt_skips_relative_transform(
     wt_sequence: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("WARNING", logger="dms_parser.builders")
+    caplog.set_level("WARNING", logger="dmsroute.builders")
 
     result = _build_source_dataset(
         tmp_path,
@@ -580,9 +580,9 @@ def test_manual_wt_score_enables_difference_without_observed_wt(
     assert pd.isna(result.iloc[0]["score_difference"])
     assert result.iloc[1]["score_raw"] == 0.5
     assert result.iloc[1]["score_difference"] == 0.75
-    assert result.attrs["dms_parser_wt_resolution"]["score"] == -0.25
+    assert result.attrs["dmsroute_wt_resolution"]["score"] == -0.25
     assert (
-        result.attrs["dms_parser_wt_resolution"]["score_provenance"]
+        result.attrs["dmsroute_wt_resolution"]["score_provenance"]
         == "user_fallback"
     )
 
@@ -617,7 +617,7 @@ def test_matching_manual_wt_score_preserves_observed_provenance(
         relative_method="difference",
     )
 
-    resolution = result.attrs["dms_parser_wt_resolution"]
+    resolution = result.attrs["dmsroute_wt_resolution"]
     assert resolution["score"] == 1.0
     assert resolution["score_provenance"] == "observed_wildtype_row"
     assert result["score_raw"].tolist() == [1.0, 0.5]

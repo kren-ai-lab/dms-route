@@ -1,22 +1,29 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "dms-parser"
+title: "DMSRoute"
 abstract: "Utilities for acquiring, parsing, validating, harmonizing, and standardizing DMS datasets from MaveDB and ProteinGym."
 version: 0.1.0
 type: software
 license: "GPL-3.0-or-later"
-url: "https://github.com/kren-ai-lab/parsing_dms_data"
+url: "https://github.com/kren-ai-lab/DMSRoute"
 authors:
-  - family-names: Escobedo
-    given-names: Sebastián
+  - family-names: "Fernández-Villegas"
+    given-names: "Diego"
     affiliation: "Universidad de Magallanes"
-  - family-names: Fernández-Villegas
-    given-names: Diego
+
+  - family-names: "Escobedo"
+    given-names: "Sebastián"
     affiliation: "Universidad de Magallanes"
-  - family-names: Medina-Ortiz
-    given-names: David
-    affiliation: "Leibniz Institute of Plant Biochemistry"
-repository-code: "https://github.com/kren-ai-lab/parsing_dms_data"
+
+  - family-names: "Alarcón"
+    given-names: "Tomás"
+    affiliation: "Universidad de Magallanes"
+
+  - family-names: "Medina-Ortiz"
+    given-names: "David"
+    affiliation: "Universidad de Magallanes"
+
+repository-code: "https://github.com/kren-ai-lab/DMSRoute"
 keywords:
   - "deep mutational scanning"
   - "data harmonization"
