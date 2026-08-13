@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "dms-parser"
+abstract: "Utilities for acquiring, parsing, validating, harmonizing, and standardizing DMS datasets from MaveDB and ProteinGym."
+version: 0.1.0
+type: software
+license: "GPL-3.0-or-later"
+url: "https://github.com/kren-ai-lab/parsing_dms_data"
+authors:
+  - family-names: Escobedo
+    given-names: Sebastián
+    affiliation: "Universidad de Magallanes"
+  - family-names: Fernández-Villegas
+    given-names: Diego
+    affiliation: "Universidad de Magallanes"
+  - family-names: Medina-Ortiz
+    given-names: David
+    affiliation: "Leibniz Institute of Plant Biochemistry"
+repository-code: "https://github.com/kren-ai-lab/parsing_dms_data"
+keywords:
+  - "deep mutational scanning"
+  - "data harmonization"
+  - "DMS datasets"
+  - "MaveDB"
+  - "ProteinGym"
+  - "bioinformatics"
+  - "protein"
