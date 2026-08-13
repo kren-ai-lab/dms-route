@@ -361,7 +361,8 @@ Commands log at `INFO` by default. Use `--log-level DEBUG`, `WARNING`, or
 
 ## Standardized output
 
-The builders preserve original source columns and add a common set of fields:
+The builders preserve original source columns and add standardized fields
+according to the source and variant type. The applicable fields include:
 
 | Column | Description |
 | --- | --- |

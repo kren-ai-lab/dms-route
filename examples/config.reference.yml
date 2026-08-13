@@ -3,7 +3,7 @@
 # from the working directory, and optional score transformations are disabled.
 
 proteingym:
-  # Required resource name; substitutions are the processable ProteinGym type.
+  # Required resource name; dms_substitutions and dms_indels are processable.
   resource: dms_substitutions
   # Required base directory for downloaded and standardized files.
   dir_base: datasets/proteingym
@@ -96,7 +96,9 @@ mavedb:
       # Dataset-level WT fallbacks are separate from builder overrides.
       wt_sequence: null
       wt_score: null
-      # Protein substitutions and complete-target identity are supported.
+      # Amino-acid substitutions, bounded single-residue deletions, and bounded
+      # single-residue insertions between adjacent anchors are supported. More
+      # complex MaveDB indels remain unsupported.
       hgvs_col: hgvs_pro
       # If omitted, score, scores.score, DMS_score, then fitness are tried.
       score_col: score

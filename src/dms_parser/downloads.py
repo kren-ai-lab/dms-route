@@ -1074,7 +1074,7 @@ def _download_proteingym_dataset(
     add_wildtype_row: bool,
     standardization: _StandardizationOptions,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Acquire and build one ProteinGym substitutions assay."""
+    """Acquire and build one assay from the selected ProteinGym variant resource."""
     metadata_record = get_dataset_metadata(
         "proteingym",
         dataset_id,
