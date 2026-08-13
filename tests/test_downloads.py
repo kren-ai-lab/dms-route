@@ -452,6 +452,48 @@ def test_batch_wt_mapping_validation_precedes_cache_and_output(tmp_path: Path) -
             False,
             {
                 "add_relative_score": True,
+                "relative_output_col": "parsed_position",
+            },
+        ),
+        (
+            False,
+            {
+                "add_relative_score": True,
+                "relative_output_col": "parsed_wt_aa",
+            },
+        ),
+        (
+            False,
+            {
+                "add_relative_score": True,
+                "relative_output_col": "parsed_mut_aa",
+            },
+        ),
+        (
+            False,
+            {
+                "add_relative_score": True,
+                "relative_output_col": "parsed_is_wildtype",
+            },
+        ),
+        (
+            False,
+            {
+                "add_relative_score": True,
+                "relative_output_col": "parsed_n_mutations",
+            },
+        ),
+        (
+            False,
+            {
+                "add_relative_score": True,
+                "relative_output_col": "parsed_mutations",
+            },
+        ),
+        (
+            False,
+            {
+                "add_relative_score": True,
                 "add_binary_label": True,
                 "binary_output_col": "status",
             },
@@ -517,6 +559,18 @@ def test_output_collision_validation_precedes_acquisition_cache_and_output(
     "options",
     [
         {"add_relative_score": True, "relative_output_col": "parsed_variant"},
+        {"add_relative_score": True, "relative_output_col": "parsed_position"},
+        {"add_relative_score": True, "relative_output_col": "parsed_wt_aa"},
+        {"add_relative_score": True, "relative_output_col": "parsed_mut_aa"},
+        {
+            "add_relative_score": True,
+            "relative_output_col": "parsed_is_wildtype",
+        },
+        {
+            "add_relative_score": True,
+            "relative_output_col": "parsed_n_mutations",
+        },
+        {"add_relative_score": True, "relative_output_col": "parsed_mutations"},
         {
             "add_relative_score": True,
             "add_binary_label": True,
@@ -544,7 +598,8 @@ def test_parsed_variant_collision_precedes_snapshot_extraction(
     cache = FilesystemCache(tmp_path / "cache")
     output_dir = tmp_path / "output"
 
-    with pytest.raises(InvalidPipelineOptionError, match="parsed_variant"):
+    protected_column = options.get("relative_output_col", "parsed_variant")
+    with pytest.raises(InvalidPipelineOptionError, match=str(protected_column)):
         download_and_standardize_dataset(
             "mavedb",
             "urn:mavedb:00000001-a-1",

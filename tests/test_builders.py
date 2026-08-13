@@ -86,6 +86,30 @@ def test_builder_dna_options_are_absent(builder) -> None:
         {"add_relative_score": True, "relative_output_col": "score_raw"},
         {
             "add_relative_score": True,
+            "relative_output_col": "parsed_position",
+        },
+        {
+            "add_relative_score": True,
+            "relative_output_col": "parsed_wt_aa",
+        },
+        {
+            "add_relative_score": True,
+            "relative_output_col": "parsed_mut_aa",
+        },
+        {
+            "add_relative_score": True,
+            "relative_output_col": "parsed_is_wildtype",
+        },
+        {
+            "add_relative_score": True,
+            "relative_output_col": "parsed_n_mutations",
+        },
+        {
+            "add_relative_score": True,
+            "relative_output_col": "parsed_mutations",
+        },
+        {
+            "add_relative_score": True,
             "add_binary_label": True,
             "binary_output_col": "score_raw",
         },
@@ -98,7 +122,12 @@ def test_builder_dna_options_are_absent(builder) -> None:
         {"add_relative_score": True, "relative_output_col": "status"},
     ],
 )
+@pytest.mark.parametrize(
+    "builder",
+    [build_mavedb_dataset, build_proteingym_dataset],
+)
 def test_builder_rejects_static_output_collisions_before_input_io(
+    builder,
     options: dict[str, object],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -111,7 +140,7 @@ def test_builder_rejects_static_output_collisions_before_input_io(
     )
 
     with pytest.raises(InvalidPipelineOptionError):
-        build_proteingym_dataset(
+        builder(
             input_path="unused.csv",
             score_col="DMS_score",
             wt_sequence="MKT",
