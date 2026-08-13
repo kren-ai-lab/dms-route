@@ -17,7 +17,7 @@ from dms_parser import (
     MaveDBDiscoveredScoreSet,
     MaveDBDiscoveryResult,
 )
-from dms_parser.exceptions import CatalogError, InvalidCatalogQueryError
+from dms_parser.core.exceptions import CatalogError, InvalidCatalogQueryError
 
 
 def _target(

@@ -17,7 +17,7 @@ from urllib.parse import quote
 import pandas as pd
 import requests
 
-from dms_parser._dataset import (
+from dms_parser.core._dataset import (
     _completed_dataset_counts,
     _mavedb_wt_sequence_evidence,
     _metadata_text,
@@ -26,7 +26,7 @@ from dms_parser._dataset import (
     _mavedb_uniprot_id,
     _wt_summary_fields,
 )
-from dms_parser._wildtype import (
+from dms_parser.core._wildtype import (
     replace_wt_sequence_provenance,
     resolve_wt_sequence,
     validate_standardization_options,
@@ -36,7 +36,7 @@ from dms_parser.builders import (
     build_proteingym_dataset,
     build_proteingym_indel_dataset,
 )
-from dms_parser.cache import FilesystemCache
+from dms_parser.acquisition.cache import FilesystemCache
 from dms_parser.catalog import (
     DatasetRecord,
     get_dataset_metadata,
@@ -44,14 +44,14 @@ from dms_parser.catalog import (
     normalize_raw_metadata,
 )
 from dms_parser.config import validate_source_dataset_id
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     DMSParserError,
     DatasetNotFoundError,
     InvalidDatasetError,
     InvalidPipelineOptionError,
     SourceConfigurationError,
 )
-from dms_parser.io import (
+from dms_parser.acquisition.io import (
     _preflight_download_batch,
     _preflight_dataset_bundle,
     _publish_download_summary,

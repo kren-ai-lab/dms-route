@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Any
 
 from dms_parser.catalog import normalize_raw_metadata
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     CatalogError,
     InvalidCatalogQueryError,
     SourceConfigurationError,

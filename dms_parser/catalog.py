@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Any, Mapping
 import numpy as np
 import pandas as pd
 
-from dms_parser.cache import FilesystemCache
-from dms_parser.exceptions import InvalidCatalogQueryError
+from dms_parser.acquisition.cache import FilesystemCache
+from dms_parser.core.exceptions import InvalidCatalogQueryError
 
 logger = logging.getLogger(__name__)
 

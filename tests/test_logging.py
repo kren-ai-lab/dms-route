@@ -9,8 +9,8 @@ import pytest
 import requests
 
 import dms_parser
-import dms_parser.fetch as fetch_module
-import dms_parser.io as io_module
+import dms_parser.acquisition.fetch as fetch_module
+import dms_parser.acquisition.io as io_module
 from dms_parser import (
     FilesystemCache,
     MaveDBCatalog,
@@ -18,7 +18,7 @@ from dms_parser import (
     build_proteingym_dataset,
     fetch_to_cache,
 )
-from dms_parser.exceptions import DownloadError
+from dms_parser.core.exceptions import DownloadError
 
 
 class JsonResponse:
@@ -133,7 +133,7 @@ def test_debug_reports_cache_diagnostics(
         b"cached content",
     )
     caplog.clear()
-    caplog.set_level(logging.DEBUG, logger="dms_parser.cache")
+    caplog.set_level(logging.DEBUG, logger="dms_parser.acquisition.cache")
 
     result = cache.resolve("example", "dataset-1")
 
@@ -279,7 +279,7 @@ def test_download_logging_redacts_url_secrets_and_preserves_file(
         "get",
         lambda *args, **kwargs: StreamingResponse(),
     )
-    caplog.set_level(logging.DEBUG, logger="dms_parser.io")
+    caplog.set_level(logging.DEBUG, logger="dms_parser.acquisition.io")
 
     result = io_module.download_file(url, output_path)
 
@@ -310,7 +310,7 @@ def test_download_exception_type_and_message_are_unchanged(
         raise cause
 
     monkeypatch.setattr(io_module.requests, "get", failed_request)
-    caplog.set_level(logging.DEBUG, logger="dms_parser.io")
+    caplog.set_level(logging.DEBUG, logger="dms_parser.acquisition.io")
 
     with pytest.raises(DownloadError) as exc_info:
         io_module.download_file(url, tmp_path / "data.csv")

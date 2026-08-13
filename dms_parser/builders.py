@@ -8,22 +8,22 @@ from typing import Any
 
 import pandas as pd
 
-from dms_parser._wildtype import (
+from dms_parser.core._wildtype import (
     WildTypeResolution,
     resolve_wt_sequence,
     resolve_wt_score,
     set_wt_resolution,
     validate_standardization_options,
 )
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     InvalidDatasetError,
     MissingWildTypeError,
     SequenceValidationError,
     UnsupportedVariantError,
     WildTypeConflictError,
 )
-from dms_parser.io import read_table
-from dms_parser.parsing import (
+from dms_parser.acquisition.io import read_table
+from dms_parser.core.parsing import (
     count_mutations,
     hgvs_to_sequence,
     is_wildtype_variant,
@@ -31,9 +31,9 @@ from dms_parser.parsing import (
     read_fasta_one,
     variant_to_sequence,
 )
-from dms_parser.transforms import add_pseudo_binary_label, add_wt_relative_score
-from dms_parser.types import SequenceBuildResult
-from dms_parser.validation import (
+from dms_parser.core.transforms import add_pseudo_binary_label, add_wt_relative_score
+from dms_parser.core.types import SequenceBuildResult
+from dms_parser.core.validation import (
     has_wildtype_row,
     validate_consistent_sequence_lengths,
     validate_required_columns,

@@ -6,8 +6,8 @@ from typing import Any
 
 import pandas as pd
 
-from dms_parser._wildtype import get_wt_resolution
-from dms_parser.parsing import translate_dna
+from dms_parser.core._wildtype import get_wt_resolution
+from dms_parser.core.parsing import translate_dna
 
 
 def _completed_dataset_counts(

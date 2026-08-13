@@ -14,7 +14,7 @@ from typing import Any
 import pandas as pd
 import requests
 
-from dms_parser._dataset import (
+from dms_parser.core._dataset import (
     _completed_dataset_counts,
     _mavedb_wt_sequence_evidence,
     _metadata_text,
@@ -23,7 +23,7 @@ from dms_parser._dataset import (
     _mavedb_uniprot_id,
     _wt_summary_fields,
 )
-from dms_parser._wildtype import (
+from dms_parser.core._wildtype import (
     replace_wt_sequence_provenance,
     resolve_wt_sequence,
 )
@@ -40,14 +40,14 @@ from dms_parser.downloads import (
     download_and_standardize_dataset,
     download_and_standardize_datasets,
 )
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     DMSParserError,
     DatasetNotFoundError,
     DownloadError,
     InvalidDatasetError,
     InvalidPipelineOptionError,
 )
-from dms_parser.io import download_file, read_table, write_table
+from dms_parser.acquisition.io import download_file, read_table, write_table
 from dms_parser.sources.mavedb_catalog import MAVEDB_API_URL
 from dms_parser.sources.proteingym_resources import get_proteingym_resource
 

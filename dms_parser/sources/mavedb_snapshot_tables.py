@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any, BinaryIO
 
-from dms_parser.cache import FilesystemCache
-from dms_parser.exceptions import (
+from dms_parser.acquisition.cache import FilesystemCache
+from dms_parser.core.exceptions import (
     MaveDBSnapshotError,
     MaveDBSnapshotTableError,
     SnapshotDatasetNotFoundError,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Mapping
 
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     UnknownSourceResourceError,
     UnsupportedSourceResourceError,
 )

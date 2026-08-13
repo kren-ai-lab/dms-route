@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from dms_parser._wildtype import WildTypeResolution, set_wt_resolution
+from dms_parser.core._wildtype import WildTypeResolution, set_wt_resolution
 
 
 def standardized_table() -> pd.DataFrame:

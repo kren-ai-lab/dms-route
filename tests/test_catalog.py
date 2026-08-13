@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import requests
 
-import dms_parser.fetch as fetch_module
+import dms_parser.acquisition.fetch as fetch_module
 from dms_parser import (
     DatasetRecord,
     FilesystemCache,
@@ -20,7 +20,7 @@ from dms_parser import (
     list_datasets,
 )
 from dms_parser.catalog import normalize_raw_metadata
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     CatalogError,
     DatasetNotFoundError,
     InvalidCatalogQueryError,

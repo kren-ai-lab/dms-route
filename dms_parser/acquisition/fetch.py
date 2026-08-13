@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from dms_parser.cache import FilesystemCache
-from dms_parser.io import download_file
+from dms_parser.acquisition.cache import FilesystemCache
+from dms_parser.acquisition.io import download_file
 
 logger = logging.getLogger(__name__)
 

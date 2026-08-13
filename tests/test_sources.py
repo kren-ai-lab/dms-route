@@ -10,8 +10,8 @@ import dms_parser.sources as sources_module
 import dms_parser.sources._dataset_adapter as adapter_module
 import dms_parser.sources.mavedb as mavedb_module
 import dms_parser.sources.proteingym as proteingym_module
-from dms_parser.cache import FilesystemCache
-from dms_parser.exceptions import InvalidCacheEntryError
+from dms_parser.acquisition.cache import FilesystemCache
+from dms_parser.core.exceptions import InvalidCacheEntryError
 
 SOURCE_ADAPTERS = (
     (

@@ -7,13 +7,13 @@ import pytest
 
 import dms_parser
 import dms_parser.builders as builders_module
-from dms_parser._wildtype import get_wt_resolution
+from dms_parser.core._wildtype import get_wt_resolution
 from dms_parser.builders import (
     build_mavedb_dataset,
     build_proteingym_dataset,
     build_proteingym_indel_dataset,
 )
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     InvalidDatasetError,
     MissingWildTypeError,
     SequenceValidationError,

@@ -15,7 +15,7 @@ import requests
 
 import dms_parser
 import dms_parser.downloads as downloads_module
-import dms_parser.fetch as fetch_module
+import dms_parser.acquisition.fetch as fetch_module
 import dms_parser.pipeline as pipeline_module
 import dms_parser.sources._mavedb_snapshot_dataset as snapshot_dataset_module
 import dms_parser.sources.mavedb_snapshot_tables as snapshot_tables_module
@@ -29,7 +29,7 @@ from dms_parser import (
     download_and_standardize_datasets,
     get_proteingym_resource,
 )
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     DatasetNotFoundError,
     DownloadError,
     InvalidDatasetError,

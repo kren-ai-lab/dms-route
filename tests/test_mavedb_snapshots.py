@@ -18,7 +18,7 @@ import dms_parser
 import dms_parser.sources as sources_module
 import dms_parser.sources.mavedb_snapshots as snapshots_module
 from dms_parser import FilesystemCache
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     InvalidSnapshotSelectorError,
     MaveDBSnapshotError,
 )

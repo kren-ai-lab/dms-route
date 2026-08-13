@@ -14,7 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 import pandas as pd
 import requests
 
-from dms_parser.exceptions import DownloadError, FileFormatError
+from dms_parser.core.exceptions import DownloadError, FileFormatError
 
 logger = logging.getLogger(__name__)
 

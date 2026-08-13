@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from dms_parser.cache import CacheManifest, FilesystemCache
-from dms_parser.exceptions import (
+from dms_parser.acquisition.cache import CacheManifest, FilesystemCache
+from dms_parser.core.exceptions import (
     CacheError,
     CacheInventoryError,
     MaveDBSnapshotError,

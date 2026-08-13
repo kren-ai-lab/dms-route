@@ -4,14 +4,14 @@ import pandas as pd
 import pytest
 
 import dms_parser
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     InvalidHGVSVariantError,
     InvalidVariantError,
     MutationApplicationError,
     SequenceValidationError,
     UnsupportedVariantError,
 )
-from dms_parser.parsing import (
+from dms_parser.core.parsing import (
     apply_mutations,
     count_mutations,
     explode_mutations,
@@ -29,7 +29,7 @@ from dms_parser.parsing import (
     translate_dna,
     variant_to_sequence,
 )
-from dms_parser.types import ProteinDeletionEdit, ProteinInsertionEdit
+from dms_parser.core.types import ProteinDeletionEdit, ProteinInsertionEdit
 
 
 def test_is_wildtype_variant_detects_common_tokens():

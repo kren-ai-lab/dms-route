@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
-from dms_parser._wildtype import validate_standardization_options
-from dms_parser.exceptions import InvalidPipelineOptionError, SourceConfigurationError
+from dms_parser.core._wildtype import validate_standardization_options
+from dms_parser.core.exceptions import InvalidPipelineOptionError, SourceConfigurationError
 from dms_parser.sources.proteingym_resources import (
     ProteinGymResource,
     get_proteingym_resource,

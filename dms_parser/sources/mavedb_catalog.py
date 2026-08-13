@@ -18,7 +18,7 @@ from dms_parser.catalog import (
     validate_offset,
     validate_query,
 )
-from dms_parser.exceptions import CatalogError
+from dms_parser.core.exceptions import CatalogError
 
 logger = logging.getLogger(__name__)
 

@@ -7,9 +7,9 @@ import logging
 import numpy as np
 import pandas as pd
 
-from dms_parser._wildtype import resolve_wt_score
-from dms_parser.constants import DEFAULT_EPSILON, NEUTRAL_LABEL
-from dms_parser.exceptions import InvalidDatasetError, MissingWildTypeError
+from dms_parser.core._wildtype import resolve_wt_score
+from dms_parser.core.constants import DEFAULT_EPSILON, NEUTRAL_LABEL
+from dms_parser.core.exceptions import InvalidDatasetError, MissingWildTypeError
 
 logger = logging.getLogger(__name__)
 

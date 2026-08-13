@@ -7,7 +7,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from dms_parser.exceptions import InvalidDatasetError, MissingWildTypeError, SequenceValidationError
+from dms_parser.core.exceptions import InvalidDatasetError, MissingWildTypeError, SequenceValidationError
 
 _SINGLE_DELETION_VARIANT_RE = re.compile(r"^[A-Z*X]\d+del$")
 _SINGLE_INSERTION_VARIANT_RE = re.compile(

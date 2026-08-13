@@ -8,8 +8,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from dms_parser.cache import FilesystemCache
-from dms_parser.exceptions import (
+from dms_parser.acquisition.cache import FilesystemCache
+from dms_parser.core.exceptions import (
     MaveDBSnapshotTableError,
     SnapshotDatasetNotFoundError,
     SupersededSnapshotDatasetError,

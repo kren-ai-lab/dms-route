@@ -8,14 +8,14 @@ from typing import Any, Iterable
 
 import pandas as pd
 
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     InvalidDatasetError,
     InvalidPipelineOptionError,
     MissingWildTypeError,
     SequenceValidationError,
     WildTypeConflictError,
 )
-from dms_parser.validation import validate_wt_sequence
+from dms_parser.core.validation import validate_wt_sequence
 
 _WT_RESOLUTION_ATTR = "dms_parser_wt_resolution"
 _SCORE_REL_TOL = 1e-9

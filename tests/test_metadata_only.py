@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-import dms_parser.fetch as fetch_module
+import dms_parser.acquisition.fetch as fetch_module
 import dms_parser.pipeline as pipeline_module
 import dms_parser.sources.mavedb as mavedb_module
 import dms_parser.sources.proteingym as proteingym_module

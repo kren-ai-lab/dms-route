@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import BinaryIO
 from urllib.parse import unquote, urlparse
 
-from dms_parser.exceptions import CorruptCacheManifestError, InvalidCacheEntryError
+from dms_parser.core.exceptions import CorruptCacheManifestError, InvalidCacheEntryError
 
 logger = logging.getLogger(__name__)
 

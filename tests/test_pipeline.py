@@ -12,7 +12,7 @@ import pytest
 import dms_parser.downloads as downloads_module
 import dms_parser.pipeline as pipeline_module
 from dms_parser import PipelineResult, run_pipeline
-from dms_parser.exceptions import InvalidPipelineOptionError
+from dms_parser.core.exceptions import InvalidPipelineOptionError
 from tests._factories import standardized_table
 
 

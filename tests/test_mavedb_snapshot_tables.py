@@ -17,7 +17,7 @@ import dms_parser
 import dms_parser.sources as sources_module
 import dms_parser.sources.mavedb_snapshot_tables as tables_module
 from dms_parser import FilesystemCache
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     MaveDBSnapshotTableError,
     SnapshotDatasetNotFoundError,
     SupersededSnapshotDatasetError,

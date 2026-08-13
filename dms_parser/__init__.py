@@ -9,8 +9,8 @@ from dms_parser.builders import (
     build_proteingym_dataset,
     build_proteingym_indel_dataset,
 )
-from dms_parser.cache import CacheManifest, FilesystemCache
-from dms_parser.cache_inventory import (
+from dms_parser.acquisition.cache import CacheManifest, FilesystemCache
+from dms_parser.acquisition.cache_inventory import (
     CacheInventoryArtifact,
     CacheInventoryEntry,
     CacheInventoryIssue,
@@ -26,7 +26,7 @@ from dms_parser.downloads import (
     download_and_standardize_dataset,
     download_and_standardize_datasets,
 )
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     CacheError,
     CacheInventoryError,
     CatalogError,
@@ -56,15 +56,15 @@ from dms_parser.exceptions import (
     UnsupportedVariantError,
     WildTypeConflictError,
 )
-from dms_parser.fetch import fetch_to_cache
-from dms_parser.io import (
+from dms_parser.acquisition.fetch import fetch_to_cache
+from dms_parser.acquisition.io import (
     download_file,
     ensure_local_copy,
     infer_filename_from_url,
     read_table,
     write_table,
 )
-from dms_parser.parsing import (
+from dms_parser.core.parsing import (
     apply_mutations,
     count_mutations,
     explode_mutations,
@@ -82,7 +82,7 @@ from dms_parser.parsing import (
     translate_dna,
     variant_to_sequence,
 )
-from dms_parser.transforms import (
+from dms_parser.core.transforms import (
     add_minmax,
     add_pseudo_binary_label,
     add_wt_relative_score,
@@ -116,7 +116,7 @@ from dms_parser.sources.proteingym_resources import (
     get_proteingym_resource,
     list_proteingym_resources,
 )
-from dms_parser.validation import (
+from dms_parser.core.validation import (
     count_invalid_sequences,
     has_wildtype_row,
     validate_column_non_empty,

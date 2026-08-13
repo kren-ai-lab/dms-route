@@ -17,8 +17,8 @@ from typing import Annotated, Any
 import requests
 import typer
 
-from dms_parser.cache import FilesystemCache
-from dms_parser.cache_inventory import (
+from dms_parser.acquisition.cache import FilesystemCache
+from dms_parser.acquisition.cache_inventory import (
     CacheInventoryArtifact,
     CacheInventoryEntry,
     CacheInventoryResult,
@@ -35,7 +35,7 @@ from dms_parser.downloads import (
     download_and_standardize_dataset,
     download_and_standardize_datasets,
 )
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     CacheInventoryError,
     DMSParserError,
     InvalidPipelineOptionError,

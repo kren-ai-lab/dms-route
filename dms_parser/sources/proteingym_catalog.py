@@ -8,7 +8,7 @@ from typing import Any, Literal, Mapping
 
 import pandas as pd
 
-from dms_parser.cache import FilesystemCache
+from dms_parser.acquisition.cache import FilesystemCache
 from dms_parser.catalog import (
     DatasetRecord,
     normalize_raw_metadata,
@@ -19,12 +19,12 @@ from dms_parser.catalog import (
     validate_offset,
     validate_query,
 )
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     CatalogError,
     DatasetNotFoundError,
     InvalidCatalogQueryError,
 )
-from dms_parser.fetch import fetch_to_cache
+from dms_parser.acquisition.fetch import fetch_to_cache
 from dms_parser.sources.proteingym_resources import get_proteingym_resource
 
 logger = logging.getLogger(__name__)

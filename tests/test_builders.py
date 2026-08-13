@@ -8,10 +8,10 @@ import pandas as pd
 import pytest
 
 import dms_parser.builders as builders_module
-from dms_parser._wildtype import resolve_wt_score
+from dms_parser.core._wildtype import resolve_wt_score
 from dms_parser.builders import build_mavedb_dataset, build_proteingym_dataset
-from dms_parser.constants import NEUTRAL_LABEL
-from dms_parser.exceptions import (
+from dms_parser.core.constants import NEUTRAL_LABEL
+from dms_parser.core.exceptions import (
     InvalidDatasetError,
     InvalidPipelineOptionError,
     MissingWildTypeError,

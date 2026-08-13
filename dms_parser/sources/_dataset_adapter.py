@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from dms_parser.cache import FilesystemCache
-from dms_parser.exceptions import InvalidCacheEntryError
-from dms_parser.fetch import fetch_to_cache
-from dms_parser.io import download_file, infer_filename_from_url
+from dms_parser.acquisition.cache import FilesystemCache
+from dms_parser.core.exceptions import InvalidCacheEntryError
+from dms_parser.acquisition.fetch import fetch_to_cache
+from dms_parser.acquisition.io import download_file, infer_filename_from_url
 
 
 def download_source_dataset(

@@ -27,7 +27,7 @@ from dms_parser import (
     MaveDBSnapshotTableExtractionResult,
     PipelineResult,
 )
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     CacheInventoryError,
     CatalogError,
     DatasetNotFoundError,

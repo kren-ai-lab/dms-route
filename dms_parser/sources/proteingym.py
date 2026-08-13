@@ -8,8 +8,8 @@ from typing import Optional
 
 import pandas as pd
 
-from dms_parser.cache import FilesystemCache
-from dms_parser.io import (
+from dms_parser.acquisition.cache import FilesystemCache
+from dms_parser.acquisition.io import (
     ensure_local_copy as ensure_local_dataset_copy,
     read_table,
 )

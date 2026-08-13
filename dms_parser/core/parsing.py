@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from dms_parser.constants import (
+from dms_parser.core.constants import (
     AA3_TO_AA1,
     DNA_CODON_TABLE,
     HGVS_BRACKET_RE,
@@ -19,14 +19,14 @@ from dms_parser.constants import (
     VALID_RESIDUES,
     WILDTYPE_TOKENS,
 )
-from dms_parser.exceptions import (
+from dms_parser.core.exceptions import (
     InvalidHGVSVariantError,
     InvalidVariantError,
     MutationApplicationError,
     SequenceValidationError,
     UnsupportedVariantError,
 )
-from dms_parser.types import (
+from dms_parser.core.types import (
     MutationTuple,
     ParsedMaveDBHGVSRecord,
     ParsedProteinEdit,
