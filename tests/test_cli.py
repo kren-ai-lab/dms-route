@@ -45,7 +45,15 @@ SNAPSHOT_EXTRACT_LATEST = (
     "--dataset-id",
     SNAPSHOT_TABLE_ID,
 )
-RUNNER = CliRunner()
+RUNNER = CliRunner(env={"COLUMNS": "240", "NO_COLOR": "1"})
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _normalized_terminal_text(output: str) -> str:
+    """Return terminal output without styling or presentation wrapping."""
+    without_ansi = _ANSI_ESCAPE.sub("", output)
+    without_borders = re.sub(r"[\u2500-\u257f]", " ", without_ansi)
+    return re.sub(r"\s+", " ", without_borders).strip()
 
 
 def _catalog_record(**overrides: Any) -> DatasetRecord:
@@ -149,7 +157,7 @@ def test_help_exits_successfully() -> None:
 
         assert result.exit_code == 0, arguments
         assert result.stderr == "", arguments
-        output = result.stdout
+        output = _normalized_terminal_text(result.stdout)
         assert all(text in output for text in expected_text), arguments
         assert "--no-" not in output, arguments
 
@@ -160,8 +168,7 @@ def _normalized_help(*arguments: str) -> str:
 
     assert result.exit_code == 0
     assert result.stderr == ""
-    without_borders = re.sub(r"[\u2500-\u257f]", " ", result.stdout)
-    return re.sub(r"\s+", " ", without_borders)
+    return _normalized_terminal_text(result.stdout)
 
 
 def test_mavedb_list_and_snapshot_discover_help_distinguish_searches() -> None:
@@ -1989,7 +1996,7 @@ def test_download_help_excludes_deferred_options(
         cli_module.main(["download", "--help"])
 
     assert exc_info.value.code == 0
-    output = capsys.readouterr().out
+    output = _normalized_terminal_text(capsys.readouterr().out)
     assert "--variant-type" in output
     assert "--keep-failed" not in output
     assert "--acquisition" in output
@@ -2447,7 +2454,7 @@ def test_download_many_help_excludes_deferred_options(
         cli_module.main(["download-many", "--help"])
 
     assert exc_info.value.code == 0
-    output = capsys.readouterr().out
+    output = _normalized_terminal_text(capsys.readouterr().out)
     for option in (
         "--continue-on-error",
         "--fail-fast",
@@ -2713,8 +2720,9 @@ def test_download_many_invalid_utf8_is_clean_usage_error(
     assert result.exit_code == 2
     assert result.stdout == ""
     assert "Traceback" not in result.stderr
-    assert "not valid UTF-8" in result.stderr
-    assert identifier_file.name in result.stderr
+    normalized = _normalized_terminal_text(result.stderr)
+    assert "not valid UTF-8" in normalized
+    assert identifier_file.name in re.sub(r"\s+", "", normalized)
     assert not output_dir.exists()
 
 
