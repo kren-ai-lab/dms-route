@@ -212,3 +212,7 @@ cache/
 
 
 *.diff
+
+# Local repository archives
+/DMSRoute-v*.zip
+/dms-parser.zip

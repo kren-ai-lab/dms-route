@@ -319,3 +319,38 @@ def test_download_exception_type_and_message_are_unchanged(
         "Failed to download file from 'https://example.test/data.csv': offline"
     )
     assert exc_info.value.__cause__ is cause
+
+
+def test_download_exception_redacts_url_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = (
+        "https://api-user:api-secret@example.test/data.csv"
+        "?token=top-secret#fragment"
+    )
+    cause = requests.ConnectionError(f"offline while requesting {url}")
+
+    def failed_request(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise cause
+
+    monkeypatch.setattr(io_module.requests, "get", failed_request)
+
+    with pytest.raises(DownloadError) as exc_info:
+        io_module.download_file(url, tmp_path / "data.csv")
+
+    message = str(exc_info.value)
+    assert message == (
+        "Failed to download file from 'https://example.test/data.csv': "
+        "ConnectionError"
+    )
+    assert exc_info.value.__cause__ is None
+    for secret in (
+        "api-user",
+        "api-secret",
+        "top-secret",
+        "token",
+        "fragment",
+    ):
+        assert secret not in message

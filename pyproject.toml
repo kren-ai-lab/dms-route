@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,9 +8,9 @@ version = "0.1.0"
 description = "Utilities for acquiring, parsing, validating, harmonizing, and standardizing DMS datasets from MaveDB and ProteinGym."
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [
-  { name = "David Medina" }
-]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Kren AI Lab", email = "krenai@umag.cl" }]
 dependencies = [
   "pandas>=2.0",
   "numpy>=1.24",
@@ -27,6 +27,9 @@ dmsroute = "dmsroute.cli:main"
 dev = [
   "pytest>=8.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/kren-ai-lab/dms-route"
 
 [tool.setuptools.packages.find]
 include = ["dmsroute*"]

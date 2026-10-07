@@ -4,7 +4,7 @@ title: "DMSRoute"
 abstract: "Utilities for acquiring, parsing, validating, harmonizing, and standardizing DMS datasets from MaveDB and ProteinGym."
 version: 0.1.0
 type: software
-license: "GPL-3.0-or-later"
+license: "MIT"
 url: "https://github.com/kren-ai-lab/dms-route"
 authors:
   - family-names: "Fernández-Villegas"

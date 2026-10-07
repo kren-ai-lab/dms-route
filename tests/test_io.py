@@ -196,7 +196,16 @@ def test_download_filesystem_failure_raises_download_error(tmp_path, monkeypatch
 
 def test_infer_filename_from_url():
     name = infer_filename_from_url("https://example.com/data.csv?download=1")
-    assert "data.csv" in name
+    assert name == "data.csv"
+
+
+def test_infer_filename_from_url_does_not_include_query_secrets():
+    name = infer_filename_from_url(
+        "https://example.com/data%20table.csv?token=top-secret#fragment"
+    )
+
+    assert name == "data table.csv"
+    assert "top-secret" not in name
 
 
 def test_read_and_write_csv(tmp_path):

@@ -1,17 +1,23 @@
 # DMSRoute
 
-`DMSRoute` is a Python package and command-line interface for obtaining and
-standardizing published Deep Mutational Scanning (DMS) datasets from
-ProteinGym and MaveDB.
+DMSRoute obtains and standardizes Deep Mutational Scanning (DMS) datasets
+from ProteinGym and MaveDB. It provides a command-line interface, a Python API,
+and a YAML pipeline for producing consistent datasets from source-specific
+tables and metadata.
 
-The package parses substitution variants and bounded single-residue protein
-indels, reconstructs or preserves protein sequences, keeps source scores in a
-common `score_raw` column, and records row-level outcomes. Score transformations
-and pseudo-binary labels are optional.
+The project name is DMSRoute. The distribution, Python package, and console
+command are named `dmsroute`.
+
+Supported sources:
+
+- ProteinGym substitution and indel datasets, identified by canonical
+  `DMS_id` values.
+- MaveDB score sets, identified by permanent score-set URNs and acquired from
+  the public API or a fixed bulk snapshot.
 
 ## Installation
 
-`dmsroute` requires Python 3.10 or newer.
+DMSRoute requires Python 3.10 or newer.
 
 ```bash
 git clone https://github.com/kren-ai-lab/dms-route.git
@@ -19,299 +25,136 @@ cd dms-route
 python -m pip install -e .
 ```
 
-Confirm that the CLI is available:
+Check the installation with:
 
 ```bash
 dmsroute --help
 ```
 
-For development, install the test dependency as well:
-
-```bash
-python -m pip install -e ".[dev]"
-```
+Development setup and validation commands are documented in
+[`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ## Quick start
 
-Inspect a MaveDB score set and produce a standardized dataset:
+Inspect a MaveDB score set:
 
 ```bash
 dmsroute metadata \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000001-a-4
-
-dmsroute download \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000001-a-4 \
-    --output-dir datasets/ube2i
+  --source mavedb \
+  --dataset-id urn:mavedb:00000001-a-4
 ```
 
-A successful single download writes:
-
-```text
-datasets/ube2i/
-|-- standardized.csv
-|-- summary.csv
-`-- summary.json
-```
-
-The equivalent ProteinGym workflow uses its canonical `DMS_id`:
+Download and standardize it:
 
 ```bash
 dmsroute download \
-    --source proteingym \
-    --variant-type indels \
-    --dataset-id ASSAY_DMS_ID \
-    --output-dir datasets/assay-indels
+  --source mavedb \
+  --dataset-id urn:mavedb:00000001-a-4 \
+  --output-dir datasets/ube2i
 ```
 
-ProteinGym direct downloads use substitutions by default. The example's
-`--variant-type indels` selects its shared indel resources. MaveDB downloads one
-score set from the public API unless snapshot acquisition is selected explicitly.
-
-## Supported data
-
-| Source | Dataset identifier | Standardized acquisition |
-| --- | --- | --- |
-| ProteinGym | Canonical `DMS_id` | Shared DMS substitutions or indels metadata and data resources |
-| MaveDB | Permanent score-set URN | Public score-set API or a prefetched bulk snapshot |
-
-The standardization workflow supports amino-acid substitutions, including
-multi-mutants. ProteinGym-style variants such as `A23V` and `A23V;G45D` and
-MaveDB protein HGVS variants such as `p.Met1Ala` and
-`p.[Met1Ala;Lys2Arg]` are supported. MaveDB complete-target identity (`p.=`)
-is treated as wild type. Equality-only bracketed expressions also represent
-protein wild type, while equality components in mixed brackets add no mutation.
-
-MaveDB protein HGVS supports single-residue deletions (`p.Cys2del` → `C2del`)
-and single-residue insertions between adjacent anchors
-(`p.Asp1_Ala2insLys` → `D1_A2insK`). More complex MaveDB indel expressions
-remain unsupported.
-
-ProteinGym's `dms_indels` resource treats `mutated_sequence` as the
-authoritative observed sequence. DMSRoute preserves it without inferring an
-HGVS expression or unique indel coordinates.
-
-## Command-line workflows
-
-### Find datasets
-
-Use `list` to query a source catalog:
+ProteinGym uses canonical `DMS_id` values:
 
 ```bash
 dmsroute list --source proteingym --query BRCA1 --limit 10
-dmsroute list --source mavedb --query BRCA1 --limit 10
-```
 
-Use `metadata` when the dataset identifier is already known:
-
-```bash
-dmsroute metadata \
-    --source proteingym \
-    --dataset-id BRCA1_HUMAN_Findlay_2018
-```
-
-Both commands support text output and JSON output:
-
-```bash
-dmsroute list \
-    --source proteingym \
-    --variant-type substitutions \
-    --format json \
-    --output proteingym-catalog.json
-```
-
-MaveDB catalog commands query the active API. ProteinGym catalog commands use
-reference files stored in the local cache. `--variant-type`, `--cache-dir`, and
-`--refresh` apply only to the ProteinGym catalog.
-
-### Download one dataset
-
-`download` obtains and standardizes one dataset without a YAML configuration:
-
-```bash
 dmsroute download \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000001-a-4 \
-    --output-dir datasets/ube2i
+  --source proteingym \
+  --dataset-id BRCA1_HUMAN_Findlay_2018 \
+  --output-dir datasets/brca1
 ```
 
-Source data are cached under `~/.cache/dmsroute` by default. Use
-`--cache-dir` to select another cache root, `--refresh` to reacquire source
-artifacts, and `--overwrite` to replace an existing three-file output bundle.
+ProteinGym substitutions are selected by default. Use `--variant-type indels`
+for the indel resource.
 
-Rows that cannot be standardized remain in the output with their `status` and
-`error` values. Pass `--drop-failed` to retain only rows whose status is `OK`.
+## CLI
 
-### Download several datasets
+The main commands are:
 
-Repeat `--dataset-id` to process an ordered batch from one source:
+| Command | Purpose |
+| --- | --- |
+| `dmsroute list` | Search a ProteinGym or MaveDB catalog |
+| `dmsroute metadata` | Retrieve metadata for one dataset |
+| `dmsroute download` | Download and standardize one dataset |
+| `dmsroute download-many` | Process several datasets from one source |
+| `dmsroute run` | Run a YAML pipeline |
+| `dmsroute discover` | Search a fixed local MaveDB snapshot |
+| `dmsroute snapshot` | Fetch snapshots or extract archival tables |
+| `dmsroute cache` | Inspect the local cache without modifying it |
+
+Each command provides its complete options through `--help`.
+
+For example, a batch can be specified with repeated identifiers:
 
 ```bash
 dmsroute download-many \
-    --source proteingym \
-    --dataset-id BRCA1_HUMAN_Findlay_2018 \
-    --dataset-id PTEN_HUMAN_Mighell_2018 \
-    --output-dir datasets
+  --source proteingym \
+  --dataset-id BRCA1_HUMAN_Findlay_2018 \
+  --dataset-id PTEN_HUMAN_Mighell_2018 \
+  --output-dir datasets
 ```
 
-Identifiers can also be read from a UTF-8 text file:
+Source artifacts are cached under `~/.cache/dmsroute` by default. Use
+`--cache-dir` to select another location.
 
-```text
-urn:mavedb:00000001-a-4
-urn:mavedb:00000665-a-1
-urn:mavedb:00000080-a-2
-```
+## MaveDB acquisition
 
-```bash
-dmsroute download-many \
-    --source mavedb \
-    --dataset-id-file mavedb_ids.txt \
-    --output-dir datasets
-```
+### API
 
-The file contains one identifier per line. Blank lines are ignored; other
-lines are treated as identifiers rather than comments or structured data. If
-direct and file inputs are combined, direct identifiers are processed first.
-Duplicate identifiers are rejected.
-
-Each dataset is written to a deterministic subdirectory. The batch root also
-contains `download-summary.csv` and `download-summary.json`:
-
-```text
-datasets/
-|-- download-summary.csv
-|-- download-summary.json
-`-- mavedb/
-    |-- id-<portable-dataset-id>/
-    |   |-- standardized.csv
-    |   |-- summary.csv
-    |   `-- summary.json
-    `-- id-<portable-dataset-id>/
-        |-- standardized.csv
-        |-- summary.csv
-        `-- summary.json
-```
-
-Expected failures are recorded per dataset and do not stop the remaining
-batch.
-
-### Apply score transformations
-
-Source scores are copied to `score_raw` without transformation. WT-relative
-scores and pseudo-binary labels must be requested explicitly:
+API acquisition is the default for MaveDB catalog, metadata, and download
+commands. It retrieves the current score-set metadata and scores for a
+permanent URN.
 
 ```bash
 dmsroute download \
-    --source proteingym \
-    --dataset-id BLAT_ECOLX_Jacquier_2013 \
-    --output-dir datasets/blat-difference \
-    --add-relative-score \
-    --relative-method difference \
-    --relative-output-col score_difference
+  --source mavedb \
+  --dataset-id urn:mavedb:00000001-a-4 \
+  --output-dir datasets/ube2i
 ```
 
-Supported relative methods are `ratio`, `log_ratio`, `log2_ratio`, and
-`difference`. They require a valid WT score from the dataset or an explicit
-`--wt-score` fallback.
+### Snapshot
 
-Raw standardization preserves source scores when multiple observed protein-WT
-rows do not define one unique WT reference; the summary reports that the WT
-score is unavailable. Requested WT-relative transformations still reject this
-ambiguity.
-
-Pseudo-binary labels are calculated from a requested relative score:
+Bulk snapshots are versioned Zenodo records. Snapshot acquisition is explicit
+and requires the selected record to be present in the local cache.
 
 ```bash
-dmsroute download \
-    --source proteingym \
-    --dataset-id BLAT_ECOLX_Jacquier_2013 \
-    --output-dir datasets/blat-labelled \
-    --add-relative-score \
-    --relative-method difference \
-    --add-binary-label \
-    --delta 0.1
-```
-
-Run `dmsroute download --help` or
-`dmsroute download-many --help` for the complete set of WT, direction, column,
-and output options.
-
-### Use MaveDB bulk snapshots
-
-MaveDB bulk snapshots are versioned Zenodo records. The archive can be about
-1.9 GB, so snapshot acquisition is always explicit.
-
-Fetch either the latest available snapshot or a fixed record:
-
-```bash
-dmsroute snapshot fetch --latest
 dmsroute snapshot fetch --record 20840937
-```
 
-Search score-set metadata in a managed snapshot:
-
-```bash
-dmsroute discover --snapshot 20840937 --query BRCA1
-```
-
-An already extracted `main.json` can be searched directly:
-
-```bash
 dmsroute discover \
-    --main-json /data/mavedb/main.json \
-    --query BRCA1
-```
+  --snapshot 20840937 \
+  --query BRCA1
 
-Extract raw archival score and count tables for selected score sets:
-
-```bash
-dmsroute snapshot extract \
-    --record 20840937 \
-    --dataset-id urn:mavedb:00000003-a-1
-```
-
-To standardize a score set from a snapshot, first fetch the concrete record,
-then select snapshot acquisition:
-
-```bash
 dmsroute download \
-    --source mavedb \
-    --dataset-id urn:mavedb:00000001-a-4 \
-    --acquisition snapshot \
-    --snapshot-record 20840937 \
-    --output-dir datasets/ube2i-snapshot
+  --source mavedb \
+  --dataset-id urn:mavedb:00000001-a-4 \
+  --acquisition snapshot \
+  --snapshot-record 20840937 \
+  --output-dir datasets/ube2i-snapshot
 ```
 
-`snapshot extract` returns raw archival tables. `download --acquisition
-snapshot` passes the selected score table through the normal MaveDB
-standardization workflow. Snapshot acquisition is available for `download` and
-`download-many`, not for the YAML pipeline.
+`dmsroute snapshot extract` extracts raw score and count tables. Snapshot
+standardization is available through `download` and `download-many`; the YAML
+pipeline uses the MaveDB API.
 
-### Run a YAML pipeline
+## Configuration
 
-Use a configuration file to process named datasets from either or both sources:
+Run a configured pipeline with:
 
 ```bash
 dmsroute run --config examples/pipeline.yml
 ```
 
-A minimal configuration has source-specific dataset lists and an optional
-summary directory:
+A configuration may contain ProteinGym, MaveDB, or both:
 
 ```yaml
 proteingym:
-  resource: dms_indels
+  resource: dms_substitutions
   dir_base: datasets/proteingym
-  default_build_kwargs:
-    drop_failed: false
   datasets:
-    - dataset_id: ASSAY_DMS_ID
+    - dataset_id: BLAT_ECOLX_Jacquier_2013
 
 mavedb:
   dir_base: datasets/mavedb
-  default_build_kwargs:
-    drop_failed: false
   datasets:
     - dataset_id: "urn:mavedb:00000001-a-4"
 
@@ -319,142 +162,69 @@ output:
   summary_dir: datasets/summaries
 ```
 
-Each dataset is processed independently. Standardized CSV files are written
-under each source's `<dir_base>/processed/` directory, and combined timestamped
-CSV and JSON summaries are written to `output.summary_dir`.
+Use `--only proteingym` or `--only mavedb` to select one configured source.
+`--dry-run` resolves configuration and source metadata without writing
+processed datasets. The full configuration contract is documented in
+[`examples/config.reference.yml`](examples/config.reference.yml).
 
-Use `resource: dms_substitutions` instead for ProteinGym substitution assays.
+## Output
 
-Select one configured source with `--only proteingym` or `--only mavedb`.
-`--dry-run` validates the configuration and resolves source metadata without
-downloading score tables or writing processed datasets.
+A successful `download` writes one dataset bundle:
 
-[`examples/config.reference.yml`](examples/config.reference.yml) documents the
-complete YAML contract and supported builder options.
-
-### Inspect the cache
-
-The cache inventory is read-only:
-
-```bash
-dmsroute cache
-dmsroute cache --source proteingym
-dmsroute cache --format json
-dmsroute cache --cache-dir ./example-cache
+```text
+output-directory/
+|-- standardized.csv
+|-- summary.csv
+`-- summary.json
 ```
 
-It reports managed entries and structural problems without downloading,
-repairing, or deleting artifacts.
+The standardized table preserves source columns and adds common dataset,
+variant, sequence, score, and row-status fields. Source scores are copied to
+`score_raw`; score transformations are opt-in.
 
-### Exit codes and logging
-
-The CLI uses these exit codes:
-
-| Code | Meaning |
-| --- | --- |
-| `0` | The command completed successfully |
-| `1` | An expected acquisition, processing, cache, or output failure occurred |
-| `2` | Command usage was invalid |
-
-Commands log at `INFO` by default. Use `--log-level DEBUG`, `WARNING`, or
-`ERROR` to change the level.
-
-## Standardized output
-
-The builders preserve original source columns and add standardized fields
-according to the source and variant type. The applicable fields include:
-
-| Column | Description |
-| --- | --- |
-| `dataset_id` | Source dataset identifier |
-| `source` | `proteingym` or `mavedb` |
-| `protein_id` | Source-derived protein identifier, when available |
-| `gene` | Source-derived gene name, when available |
-| `uniprot_id` | Source-derived UniProt identifier, when available |
-| `wt_sequence` | Wild-type protein sequence used for reconstruction |
-| `variant` | Normalized edit notation; missing for ProteinGym indels |
-| `parsed_position` | Position for a single normalized substitution; otherwise missing |
-| `parsed_wt_aa` | Reference residue for a single normalized substitution; otherwise missing |
-| `parsed_mut_aa` | Mutant residue for a single normalized substitution; otherwise missing |
-| `mutated_sequence` | Reconstructed sequence or authoritative ProteinGym mutant sequence |
-| `is_wildtype` | Whether the row represents wild type |
-| `is_synthetic` | Whether the row was generated by the builder |
-| `n_mutations` | Parsed edit count; missing for non-WT ProteinGym indels |
-| `score_raw` | Numeric copy of the selected source score |
-| `status` | `OK`, `Error`, or `Unsupported` |
-| `error` | Row-level parsing or reconstruction error |
-
-Requested transformations add their configured output columns. ProteinGym and
-MaveDB substitution parsing add single-substitution `parsed_*` metadata, and
-source-specific columns remain in the table.
-
-The accompanying summary files record dataset-level row counts, output paths,
-WT provenance, and requested transformations.
+`download-many` also writes `download-summary.csv` and
+`download-summary.json` at the batch root. YAML pipelines write processed CSV
+files under each source directory and combined summaries under
+`output.summary_dir`.
 
 ## Python API
 
-### Build from a local table
-
-```python
-from dmsroute import build_proteingym_dataset
-
-dataset = build_proteingym_dataset(
-    input_path="experiment.csv",
-    score_col="DMS_score",
-    variant_col="mutant",
-    wt_sequence="MKTAYIAKQRQISFVKSHFSRQDILDLWQ",
-    dataset_id="example-assay",
-)
-```
-
-Use `build_mavedb_dataset` for a local MaveDB-like table with protein HGVS
-variants.
-
-### Download programmatically
+The same download workflow is available from Python:
 
 ```python
 from pathlib import Path
 
 from dmsroute import FilesystemCache, download_and_standardize_dataset
 
+cache = FilesystemCache(Path.home() / ".cache" / "dmsroute")
 result = download_and_standardize_dataset(
     "mavedb",
     "urn:mavedb:00000001-a-4",
     output_dir="datasets/ube2i",
-    cache=FilesystemCache(Path.home() / ".cache" / "dmsroute"),
+    cache=cache,
 )
 
 print(result.dataset_path)
 ```
 
-The package also exports catalog, parsing, transformation, validation,
-snapshot, cache, and configuration APIs through `dmsroute`.
+Local tables can be standardized with `build_proteingym_dataset`,
+`build_proteingym_indel_dataset`, and `build_mavedb_dataset`.
 
-## Examples
+## Documentation
 
-The `examples/` directory contains:
+- [`examples/`](examples/) contains notebooks for acquisition, parsing, and
+  score transformations.
+- [`examples/config.reference.yml`](examples/config.reference.yml) documents
+  every YAML option.
+- [`DEVELOPMENT.md`](DEVELOPMENT.md) covers development setup, architecture,
+  tests, and packaging checks.
+- `dmsroute <command> --help` is the reference for CLI options.
 
-- [`01_quickstart_proteingym.ipynb`](examples/01_quickstart_proteingym.ipynb):
-  download and standardize a ProteinGym assay.
-- [`02_quickstart_mavedb_download.ipynb`](examples/02_quickstart_mavedb_download.ipynb):
-  obtain and standardize a MaveDB score set.
-- [`03_variant_parsing_and_reconstruction.ipynb`](examples/03_variant_parsing_and_reconstruction.ipynb):
-  parse substitutions and supported single-residue indels, then reconstruct
-  sequences.
-- [`04_transforms_and_pseudo_labels.ipynb`](examples/04_transforms_and_pseudo_labels.ipynb):
-  apply score transformations and pseudo-binary labels.
-- [`pipeline.yml`](examples/pipeline.yml): example configuration for
-  `dmsroute run`.
-- [`config.reference.yml`](examples/config.reference.yml): commented reference
-  for the YAML configuration.
+## Citation
 
-## Testing
-
-```bash
-python -m pytest
-```
+If you use DMSRoute in research, cite the software using the authors, version,
+and release information in [`CITATION.cff`](CITATION.cff).
 
 ## License
 
-This project is distributed under the GNU General Public License v3. See
-[`LICENSE`](LICENSE).
+MIT. See [`LICENSE`](LICENSE).

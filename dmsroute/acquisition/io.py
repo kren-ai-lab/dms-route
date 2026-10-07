@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import pandas as pd
 import requests
@@ -363,8 +363,14 @@ def download_file(
                     failure = exc
 
     if failure is not None:
+        sanitized_url = _sanitize_url_for_logging(url)
+        if sanitized_url != url:
+            raise DownloadError(
+                f"Failed to download file from {sanitized_url!r}: "
+                f"{type(failure).__name__}"
+            ) from None
         raise DownloadError(
-            f"Failed to download file from {url!r}: {failure}"
+            f"Failed to download file from {sanitized_url!r}: {failure}"
         ) from failure
 
     logger.info("Completed download destination=%s", output_path)
@@ -378,12 +384,15 @@ def infer_filename_from_url(
     default_name: str = "dataset.csv",
 ) -> str:
     """Infer a reasonable filename from a URL."""
-    name = Path(url).name
+    try:
+        name = Path(unquote(urlsplit(url).path)).name
+    except (TypeError, ValueError):
+        name = ""
 
     if not name:
         return default_name
 
-    return name.replace("?", "_").replace("&", "_")
+    return name
 
 
 def ensure_local_copy(

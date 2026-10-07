@@ -1,0 +1,4 @@
+include CITATION.cff
+include DEVELOPMENT.md
+recursive-include examples *.ipynb *.yml
+recursive-include tests *.py
