@@ -222,8 +222,24 @@ Local tables can be standardized with `build_proteingym_dataset`,
 
 ## Citation
 
-If you use DMSRoute in research, cite the software using the authors, version,
-and release information in [`CITATION.cff`](CITATION.cff).
+If you use DMSRoute in your research, please cite:
+
+> Fernández-Villegas, D.; Escobedo, S.; Alarcón, T.; Medina-Ortiz, D.
+> *DMSRoute*.
+> Version 0.1.1, 2026. Zenodo.
+> https://doi.org/10.5281/zenodo.21924522
+
+```bibtex
+@software{dmsroute2026,
+  author    = {Fernández-Villegas, Diego and Escobedo, Sebastián and Alarcón, Tomás and Medina-Ortiz, David},
+  title     = {DMSRoute},
+  year      = {2026},
+  version   = {0.1.1},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.21924522},
+  url       = {https://doi.org/10.5281/zenodo.21924522}
+}
+```
 
 ## License
 

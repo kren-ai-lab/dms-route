@@ -34,5 +34,5 @@ keywords:
   - "protein"
 identifiers:
   - type: doi
-    value: "10.5281/zenodo.21924523"
-    description: "Zenodo DOI for DMSRoute v0.1.0"
+    value: 10.5281/zenodo.21924522
+    description: "Concept DOI (all versions)"
