@@ -106,7 +106,7 @@ Optional clean-install validation:
 ```bash
 python -m venv /tmp/dmsroute-check
 # activate the temporary environment and install the built wheel
-python -m pip install dist/dmsroute-0.1.0-py3-none-any.whl
+python -m pip install dist/dmsroute-0.1.1-py3-none-any.whl
 python -m pip check
 dmsroute --help
 ```

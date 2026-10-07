@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "DMSRoute"
 abstract: "Utilities for acquiring, parsing, validating, harmonizing, and standardizing DMS datasets from MaveDB and ProteinGym."
-version: 0.1.0
+version: 0.1.1
 type: software
 license: "MIT"
 url: "https://github.com/kren-ai-lab/dms-route"
